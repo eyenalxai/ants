@@ -8,6 +8,8 @@ pub fn setup(
     mut commands: Commands,
     mut food_cells: ResMut<FoodCells>,
     pheromone_grid: Res<PheromoneGrid>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn((
         Camera2d,
@@ -37,13 +39,11 @@ pub fn setup(
         }
     }
 
+    let nest_radius = NEST_SIZE / 4.0;
     commands.spawn((
         Nest,
-        Sprite {
-            color: Color::srgb(0.4, 0.25, 0.1),
-            custom_size: Some(Vec2::new(NEST_SIZE, NEST_SIZE)),
-            ..default()
-        },
+        Mesh2d(meshes.add(Circle::new(nest_radius))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(1.0, 0.0, 0.0)))),
         Transform::from_xyz(NEST_X, NEST_Y, 0.0),
     ));
 
