@@ -1,9 +1,8 @@
 use crate::components::{Ant, Food, Nest};
+use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
-
-const SENSOR_DISTANCE: f32 = 20.0;
 
 pub fn check_collisions(
     mut ant_query: Query<(&mut Ant, &Transform)>,
@@ -19,8 +18,8 @@ pub fn check_collisions(
     };
     let food_pos = Vec2::new(food_transform.translation.x, food_transform.translation.y);
     let nest_pos = Vec2::new(nest_transform.translation.x, nest_transform.translation.y);
-    let food_radius = 15.0 / 2.0;
-    let nest_radius = 40.0 / 2.0;
+    let food_radius = FOOD_SIZE / 2.0;
+    let nest_radius = NEST_SIZE / 2.0;
 
     for (mut ant, transform) in &mut ant_query {
         let ant_pos = Vec2::new(transform.translation.x, transform.translation.y);
@@ -39,10 +38,9 @@ fn find_best_direction(ant: &Ant, current_pos: Vec2, pheromone_grid: &PheromoneG
     let mut total_intensity = 0.0;
     let mut weighted_x = 0.0;
     let mut weighted_y = 0.0;
-    let full_scan_sensors = 16;
 
-    for i in 0..full_scan_sensors {
-        let check_angle = (i as f32 / full_scan_sensors as f32) * 2.0 * PI;
+    for i in 0..FULL_SCAN_SENSORS {
+        let check_angle = (i as f32 / FULL_SCAN_SENSORS as f32) * 2.0 * PI;
 
         let sensor_pos = current_pos
             + Vec2::new(

@@ -9,7 +9,7 @@ mod pheromone;
 mod systems;
 
 use ant_spawner::AntSpawner;
-use constants::{ANT_SPAWN_INTERVAL, WINDOW_HEIGHT, WINDOW_WIDTH};
+use constants::*;
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
 use systems::{

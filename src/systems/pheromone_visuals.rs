@@ -1,5 +1,6 @@
 use crate::PheromoneDisplayState;
 use crate::components::PheromoneCell;
+use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 
@@ -20,7 +21,7 @@ pub fn update_pheromone_visuals(
 
             let red = to_food_intensity;
             let blue = to_nest_intensity;
-            let alpha = (to_food_intensity + to_nest_intensity).min(1.0) * 0.5;
+            let alpha = (to_food_intensity + to_nest_intensity).min(1.0) * PHEROMONE_VISUAL_ALPHA;
 
             sprite.color = Color::srgba(red, 0.0, blue, alpha);
         }

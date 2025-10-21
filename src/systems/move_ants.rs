@@ -1,16 +1,8 @@
 use crate::components::{Ant, Food, Nest};
-use crate::constants::{
-    ANT_EXPLORATION_CHANCE, ANT_PHEROMONE_FOLLOW_RANDOMNESS, ANT_RANDOM_TURN_CHANCE, ANT_TURN_RATE,
-    PHEROMONE_DEPOSIT_RATE, PHEROMONE_MAX_INTENSITY, WINDOW_HEIGHT, WINDOW_WIDTH,
-};
+use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
-
-const SENSOR_DISTANCE: f32 = 20.0;
-const SENSOR_ANGLE: f32 = PI / 4.0;
-const NUM_SENSORS: usize = 5;
-const TARGET_LOCK_DISTANCE: f32 = 40.0;
 
 pub fn move_ants(
     mut ant_query: Query<(&mut Ant, &mut Transform), Without<Food>>,
@@ -21,7 +13,7 @@ pub fn move_ants(
 ) {
     let half_width = WINDOW_WIDTH as f32 / 2.0;
     let half_height = WINDOW_HEIGHT as f32 / 2.0;
-    let min_angle = 30.0_f32.to_radians();
+    let min_angle = WALL_BOUNCE_MIN_ANGLE.to_radians();
     let delta = time.delta_secs();
 
     let food_pos = food_query
@@ -81,7 +73,7 @@ pub fn move_ants(
             }
 
             if total_intensity > 0.01 && rand::random::<f32>() > ANT_EXPLORATION_CHANCE {
-                let use_probabilistic = rand::random::<f32>() < 0.6;
+                let use_probabilistic = rand::random::<f32>() < ANT_PROBABILISTIC_STEERING_CHANCE;
 
                 let target_direction = if use_probabilistic {
                     let random_value = rand::random::<f32>() * total_intensity;
@@ -96,7 +88,8 @@ pub fn move_ants(
                         }
                     }
 
-                    let noise = (rand::random::<f32>() - 0.5) * SENSOR_ANGLE * 0.8;
+                    let noise =
+                        (rand::random::<f32>() - 0.5) * SENSOR_ANGLE * ANT_STEERING_NOISE_FACTOR;
                     chosen_angle + noise
                 } else {
                     let mut weighted_x = 0.0;
@@ -118,7 +111,7 @@ pub fn move_ants(
                 };
 
                 let intensity_strength = (total_intensity / 10.0).min(1.0);
-                let exploration_factor = 1.0 - (intensity_strength * 0.6);
+                let exploration_factor = 1.0 - (intensity_strength * ANT_EXPLORATION_STRENGTH_BASE);
                 let random_offset = (rand::random::<f32>() - 0.5)
                     * 2.0
                     * ANT_PHEROMONE_FOLLOW_RANDOMNESS
@@ -126,7 +119,9 @@ pub fn move_ants(
                     * exploration_factor;
 
                 let randomized_angle = shortest_angle + random_offset;
-                let max_turn = ANT_TURN_RATE * delta * (0.6 + intensity_strength * 0.4);
+                let max_turn = ANT_TURN_RATE
+                    * delta
+                    * (ANT_TURN_INTENSITY_BASE + intensity_strength * ANT_TURN_INTENSITY_SCALE);
                 let turn_amount = randomized_angle.clamp(-max_turn, max_turn);
                 ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
             } else if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
@@ -185,7 +180,8 @@ pub fn move_ants(
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
         if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(pos) {
             let youth_factor = (ant.lifetime / ant.max_lifetime).max(0.0);
-            let youth_multiplier = 0.2 + (youth_factor * youth_factor * 0.8);
+            let youth_multiplier =
+                ANT_YOUTH_DEPOSIT_MIN + (youth_factor * youth_factor * ANT_YOUTH_DEPOSIT_MAX);
             let deposit_amount = PHEROMONE_DEPOSIT_RATE * delta * youth_multiplier;
 
             if ant.has_food {

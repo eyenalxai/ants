@@ -1,11 +1,8 @@
 use crate::SelectedAnt;
 use crate::components::Ant;
+use crate::constants::*;
 use bevy::prelude::*;
 use std::f32::consts::PI;
-
-const SENSOR_DISTANCE: f32 = 20.0;
-const SENSOR_ANGLE: f32 = PI / 4.0;
-const NUM_SENSORS: usize = 5;
 
 #[derive(Component)]
 pub struct SensorConeMarker;
@@ -41,8 +38,8 @@ pub fn draw_sensor_cone(
             commands.spawn((
                 SensorConeMarker,
                 Sprite {
-                    color: Color::srgba(0.0, 1.0, 0.0, 0.6),
-                    custom_size: Some(Vec2::new(3.0, 3.0)),
+                    color: Color::srgba(0.0, 1.0, 0.0, SENSOR_CONE_MARKER_ALPHA),
+                    custom_size: Some(Vec2::new(SENSOR_CONE_MARKER_SIZE, SENSOR_CONE_MARKER_SIZE)),
                     ..default()
                 },
                 Transform::from_xyz(sensor_pos.x, sensor_pos.y, 2.0),
@@ -51,8 +48,8 @@ pub fn draw_sensor_cone(
             commands.spawn((
                 SensorConeMarker,
                 Sprite {
-                    color: Color::srgba(0.0, 1.0, 0.0, 0.2),
-                    custom_size: Some(Vec2::new(1.0, SENSOR_DISTANCE)),
+                    color: Color::srgba(0.0, 1.0, 0.0, SENSOR_CONE_LINE_ALPHA),
+                    custom_size: Some(Vec2::new(SENSOR_CONE_LINE_WIDTH, SENSOR_DISTANCE)),
                     ..default()
                 },
                 Transform::from_xyz(
@@ -67,8 +64,11 @@ pub fn draw_sensor_cone(
         commands.spawn((
             SensorConeMarker,
             Sprite {
-                color: Color::srgba(1.0, 0.0, 0.0, 0.8),
-                custom_size: Some(Vec2::new(5.0, 5.0)),
+                color: Color::srgba(1.0, 0.0, 0.0, SENSOR_CONE_ANT_ALPHA),
+                custom_size: Some(Vec2::new(
+                    SENSOR_CONE_ANT_MARKER_SIZE,
+                    SENSOR_CONE_ANT_MARKER_SIZE,
+                )),
                 ..default()
             },
             Transform::from_xyz(ant_pos.x, ant_pos.y, 2.0),

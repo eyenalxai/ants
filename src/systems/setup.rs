@@ -1,5 +1,5 @@
 use crate::components::{Food, Nest, PheromoneCell};
-use crate::constants::{GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::constants::*;
 use bevy::prelude::*;
 
 pub fn setup(mut commands: Commands) {
@@ -35,19 +35,19 @@ pub fn setup(mut commands: Commands) {
         Nest,
         Sprite {
             color: Color::srgb(0.4, 0.25, 0.1),
-            custom_size: Some(Vec2::new(40.0, 40.0)),
+            custom_size: Some(Vec2::new(NEST_SIZE, NEST_SIZE)),
             ..default()
         },
-        Transform::from_xyz(-350.0, 0.0, 0.0),
+        Transform::from_xyz(NEST_X, NEST_Y, 0.0),
     ));
 
     commands.spawn((
         Food,
         Sprite {
             color: Color::srgb(0.2, 0.8, 0.2),
-            custom_size: Some(Vec2::new(15.0, 15.0)),
+            custom_size: Some(Vec2::new(FOOD_SIZE, FOOD_SIZE)),
             ..default()
         },
-        Transform::from_xyz(320.0, 0.0, 0.0),
+        Transform::from_xyz(FOOD_X, FOOD_Y, 0.0),
     ));
 }
