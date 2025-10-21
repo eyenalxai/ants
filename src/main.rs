@@ -17,7 +17,7 @@ use resources::{FoodCells, FoodManagementState, PheromoneDisplayState, SelectedA
 use systems::{
     check_collisions, decay_pheromones, draw_sensor_cone, handle_food_clicks, move_ants, setup,
     setup_food_button, spawn_ants, toggle_food_management, toggle_pheromone_display,
-    update_ant_lifetime, update_pheromone_visuals,
+    update_ant_lifetime, update_food_cursor, update_pheromone_visuals,
 };
 
 fn main() {
@@ -57,6 +57,7 @@ fn main() {
                 toggle_pheromone_display,
                 draw_sensor_cone,
                 toggle_food_management,
+                update_food_cursor,
                 handle_food_clicks,
             ),
         )

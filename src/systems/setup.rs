@@ -51,22 +51,32 @@ pub fn setup(
     if let Some((food_grid_x, food_grid_y)) =
         pheromone_grid.world_to_grid(Vec2::new(FOOD_X, FOOD_Y))
     {
-        food_cells.cells.push((food_grid_x, food_grid_y));
+        for dy in 0..3 {
+            for dx in 0..3 {
+                let gx = food_grid_x + dx;
+                let gy = food_grid_y + dy;
 
-        let world_x = food_grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-        let world_y = food_grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+                if gx < GRID_WIDTH && gy < GRID_HEIGHT {
+                    food_cells.cells.push((gx, gy));
 
-        commands.spawn((
-            FoodMarker {
-                grid_x: food_grid_x,
-                grid_y: food_grid_y,
-            },
-            Sprite {
-                color: Color::srgb(0.2, 0.8, 0.2),
-                custom_size: Some(Vec2::new(GRID_SIZE, GRID_SIZE)),
-                ..default()
-            },
-            Transform::from_xyz(world_x, world_y, 0.5),
-        ));
+                    let world_x =
+                        gx as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
+                    let world_y =
+                        gy as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+
+                    commands.spawn((
+                        FoodMarker {
+                            grid_x: gx,
+                            grid_y: gy,
+                        },
+                        Mesh2d(meshes.add(Circle::new(GRID_SIZE / 2.0))),
+                        MeshMaterial2d(
+                            materials.add(ColorMaterial::from_color(Color::srgb(0.2, 0.8, 0.2))),
+                        ),
+                        Transform::from_xyz(world_x, world_y, 0.5),
+                    ));
+                }
+            }
+        }
     }
 }
