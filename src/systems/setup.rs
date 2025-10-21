@@ -2,6 +2,7 @@ use crate::components::{Nest, PheromoneCell};
 use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use crate::resources::FoodCells;
+use crate::systems::food_management::FoodMarker;
 use bevy::prelude::*;
 
 pub fn setup(
@@ -56,6 +57,10 @@ pub fn setup(
         let world_y = food_grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
 
         commands.spawn((
+            FoodMarker {
+                grid_x: food_grid_x,
+                grid_y: food_grid_y,
+            },
             Sprite {
                 color: Color::srgb(0.2, 0.8, 0.2),
                 custom_size: Some(Vec2::new(GRID_SIZE, GRID_SIZE)),

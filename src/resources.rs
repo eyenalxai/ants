@@ -14,3 +14,8 @@ pub struct SelectedAnt {
 pub struct FoodCells {
     pub cells: Vec<(usize, usize)>,
 }
+
+#[derive(Resource)]
+pub struct FoodManagementState {
+    pub enabled: bool,
+}

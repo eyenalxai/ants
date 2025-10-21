@@ -1,4 +1,5 @@
 mod collision;
+mod food_management;
 mod movement;
 mod pheromone_decay;
 mod pheromone_toggle;
@@ -8,6 +9,7 @@ mod setup;
 mod spawn_ants;
 
 pub use collision::check_collisions;
+pub use food_management::{handle_food_clicks, setup_food_button, toggle_food_management};
 pub use movement::move_ants;
 pub use pheromone_decay::decay_pheromones;
 pub use pheromone_toggle::toggle_pheromone_display;
