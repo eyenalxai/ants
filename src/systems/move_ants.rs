@@ -55,8 +55,13 @@ pub fn move_ants(
 
         if best_intensity > 0.1 {
             let angle_diff = (best_direction - ant.direction).rem_euclid(2.0 * PI);
-            let turn_direction = if angle_diff > PI { -1.0 } else { 1.0 };
-            let turn_amount = turn_direction * ANT_TURN_RATE * delta;
+            let shortest_angle = if angle_diff > PI {
+                angle_diff - 2.0 * PI
+            } else {
+                angle_diff
+            };
+            let max_turn = ANT_TURN_RATE * delta;
+            let turn_amount = shortest_angle.clamp(-max_turn, max_turn);
             ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
         } else if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
             let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
