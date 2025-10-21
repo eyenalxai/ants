@@ -17,3 +17,6 @@ pub struct PheromoneCell {
     pub grid_x: usize,
     pub grid_y: usize,
 }
+
+#[derive(Component)]
+pub struct Wall;

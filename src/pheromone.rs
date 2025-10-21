@@ -1,4 +1,4 @@
-use crate::constants::{GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::constants::{GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
 use bevy::prelude::*;
 
 #[derive(Clone, Copy, Default)]
@@ -20,8 +20,8 @@ impl PheromoneGrid {
     }
 
     pub fn world_to_grid(&self, world_pos: Vec2) -> Option<(usize, usize)> {
-        let x = ((world_pos.x + WINDOW_WIDTH as f32 / 2.0) / GRID_SIZE) as i32;
-        let y = ((world_pos.y + WINDOW_HEIGHT as f32 / 2.0) / GRID_SIZE) as i32;
+        let x = ((world_pos.x + PLAY_AREA_WIDTH / 2.0) / GRID_SIZE) as i32;
+        let y = ((world_pos.y + PLAY_AREA_HEIGHT / 2.0) / GRID_SIZE) as i32;
 
         if x >= 0 && x < GRID_WIDTH as i32 && y >= 0 && y < GRID_HEIGHT as i32 {
             Some((x as usize, y as usize))

@@ -79,8 +79,8 @@ fn find_closest_food_in_range(
 fn grid_to_world(grid_x: usize, grid_y: usize) -> Option<Vec2> {
     use crate::constants::*;
 
-    let world_x = grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-    let world_y = grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+    let world_x = grid_x as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
+    let world_y = grid_y as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
 
     Some(Vec2::new(world_x, world_y))
 }

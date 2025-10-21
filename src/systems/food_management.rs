@@ -123,10 +123,8 @@ pub fn handle_food_clicks(
                 {
                     food_cells.cells.insert((gx, gy), INITIAL_FOOD_AMOUNT);
 
-                    let world_x =
-                        gx as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-                    let world_y =
-                        gy as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+                    let world_x = gx as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
+                    let world_y = gy as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
 
                     commands.spawn((
                         FoodMarker {
@@ -210,8 +208,8 @@ pub fn update_food_cursor(
     };
 
     let size = 3.0 * GRID_SIZE;
-    let center_x = (grid_x as f32 + 1.5) * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0;
-    let center_y = (grid_y as f32 + 1.5) * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0;
+    let center_x = (grid_x as f32 + 1.5) * GRID_SIZE - PLAY_AREA_WIDTH / 2.0;
+    let center_y = (grid_y as f32 + 1.5) * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0;
 
     commands.spawn((
         FoodCursorMarker,

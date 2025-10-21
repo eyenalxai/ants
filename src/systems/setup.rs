@@ -1,4 +1,4 @@
-use crate::components::{Nest, PheromoneCell};
+use crate::components::{Nest, PheromoneCell, Wall};
 use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use crate::resources::FoodCells;
@@ -15,15 +15,15 @@ pub fn setup(
     commands.spawn((
         Camera2d,
         Camera {
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.1, 0.1, 0.1)),
             ..default()
         },
     ));
 
     for y in 0..GRID_HEIGHT {
         for x in 0..GRID_WIDTH {
-            let world_x = x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-            let world_y = y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+            let world_x = x as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
+            let world_y = y as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
 
             commands.spawn((
                 PheromoneCell {
@@ -39,6 +39,56 @@ pub fn setup(
             ));
         }
     }
+
+    let wall_color = Color::srgb(0.3, 0.3, 0.3);
+    let half_width = PLAY_AREA_WIDTH / 2.0;
+    let half_height = PLAY_AREA_HEIGHT / 2.0;
+
+    commands.spawn((
+        Wall,
+        Sprite {
+            color: wall_color,
+            custom_size: Some(Vec2::new(
+                PLAY_AREA_WIDTH + WALL_THICKNESS * 2.0,
+                WALL_THICKNESS,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(0.0, half_height + WALL_THICKNESS / 2.0, 0.1),
+    ));
+
+    commands.spawn((
+        Wall,
+        Sprite {
+            color: wall_color,
+            custom_size: Some(Vec2::new(
+                PLAY_AREA_WIDTH + WALL_THICKNESS * 2.0,
+                WALL_THICKNESS,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(0.0, -half_height - WALL_THICKNESS / 2.0, 0.1),
+    ));
+
+    commands.spawn((
+        Wall,
+        Sprite {
+            color: wall_color,
+            custom_size: Some(Vec2::new(WALL_THICKNESS, PLAY_AREA_HEIGHT)),
+            ..default()
+        },
+        Transform::from_xyz(half_width + WALL_THICKNESS / 2.0, 0.0, 0.1),
+    ));
+
+    commands.spawn((
+        Wall,
+        Sprite {
+            color: wall_color,
+            custom_size: Some(Vec2::new(WALL_THICKNESS, PLAY_AREA_HEIGHT)),
+            ..default()
+        },
+        Transform::from_xyz(-half_width - WALL_THICKNESS / 2.0, 0.0, 0.1),
+    ));
 
     let nest_radius = NEST_SIZE / 4.0;
     commands.spawn((
@@ -59,10 +109,8 @@ pub fn setup(
                 if gx < GRID_WIDTH && gy < GRID_HEIGHT {
                     food_cells.cells.insert((gx, gy), INITIAL_FOOD_AMOUNT);
 
-                    let world_x =
-                        gx as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-                    let world_y =
-                        gy as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+                    let world_x = gx as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
+                    let world_y = gy as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
 
                     commands.spawn((
                         FoodMarker {

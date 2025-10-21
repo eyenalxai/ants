@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use std::f32::consts::PI;
 
 pub fn handle_wall_collision(ant: &mut Ant, transform: &mut Transform) {
-    let half_width = WINDOW_WIDTH as f32 / 2.0;
-    let half_height = WINDOW_HEIGHT as f32 / 2.0;
+    let half_width = PLAY_AREA_WIDTH / 2.0;
+    let half_height = PLAY_AREA_HEIGHT / 2.0;
     let min_angle = WALL_BOUNCE_MIN_ANGLE.to_radians();
 
     if transform.translation.x > half_width || transform.translation.x < -half_width {
@@ -51,4 +51,3 @@ pub fn handle_wall_collision(ant: &mut Ant, transform: &mut Transform) {
         ant.direction = new_direction.rem_euclid(2.0 * PI);
     }
 }
-

@@ -28,7 +28,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "Ants Simulation".into(),
                 resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
-                resizable: false,
+                resizable: true,
                 present_mode: bevy::window::PresentMode::AutoNoVsync,
                 ..default()
             }),
