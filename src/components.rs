@@ -11,6 +11,7 @@ pub struct Ant {
     pub direction: f32,
     pub has_food: bool,
     pub lifetime: f32,
+    pub max_lifetime: f32,
     pub speed: f32,
 }
 

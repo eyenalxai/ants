@@ -49,9 +49,8 @@ pub fn move_ants(
             let target_angle = to_target.y.atan2(to_target.x);
             ant.direction = target_angle;
         } else {
+            let mut sensor_readings = Vec::with_capacity(NUM_SENSORS);
             let mut total_intensity = 0.0;
-            let mut weighted_x = 0.0;
-            let mut weighted_y = 0.0;
 
             for i in 0..NUM_SENSORS {
                 let angle_offset =
@@ -64,24 +63,54 @@ pub fn move_ants(
                         check_angle.sin() * SENSOR_DISTANCE,
                     );
 
-                if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(sensor_pos)
+                let intensity = if let Some((grid_x, grid_y)) =
+                    pheromone_grid.world_to_grid(sensor_pos)
                     && let Some(pheromone) = pheromone_grid.get(grid_x, grid_y)
                 {
-                    let intensity = if ant.has_food {
+                    if ant.has_food {
                         pheromone.to_nest
                     } else {
                         pheromone.to_food
-                    };
+                    }
+                } else {
+                    0.0
+                };
 
-                    total_intensity += intensity;
-                    weighted_x += check_angle.cos() * intensity;
-                    weighted_y += check_angle.sin() * intensity;
-                }
+                total_intensity += intensity;
+                sensor_readings.push((check_angle, intensity));
             }
 
             if total_intensity > 0.01 && rand::random::<f32>() > ANT_EXPLORATION_CHANCE {
-                let average_direction = weighted_y.atan2(weighted_x);
-                let angle_diff = (average_direction - ant.direction).rem_euclid(2.0 * PI);
+                let use_probabilistic = rand::random::<f32>() < 0.5;
+
+                let target_direction = if use_probabilistic {
+                    let random_value = rand::random::<f32>() * total_intensity;
+                    let mut cumulative = 0.0;
+                    let mut chosen_angle = ant.direction;
+
+                    for (angle, intensity) in &sensor_readings {
+                        cumulative += intensity;
+                        if cumulative >= random_value {
+                            chosen_angle = *angle;
+                            break;
+                        }
+                    }
+
+                    let noise = (rand::random::<f32>() - 0.5) * SENSOR_ANGLE * 0.5;
+                    chosen_angle + noise
+                } else {
+                    let mut weighted_x = 0.0;
+                    let mut weighted_y = 0.0;
+
+                    for (angle, intensity) in &sensor_readings {
+                        weighted_x += angle.cos() * intensity;
+                        weighted_y += angle.sin() * intensity;
+                    }
+
+                    weighted_y.atan2(weighted_x)
+                };
+
+                let angle_diff = (target_direction - ant.direction).rem_euclid(2.0 * PI);
                 let shortest_angle = if angle_diff > PI {
                     angle_diff - 2.0 * PI
                 } else {
@@ -155,7 +184,10 @@ pub fn move_ants(
 
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
         if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(pos) {
-            let deposit_amount = PHEROMONE_DEPOSIT_RATE * delta;
+            let youth_factor = (ant.lifetime / ant.max_lifetime).max(0.0);
+            let youth_multiplier = 0.2 + (youth_factor * youth_factor * 0.8);
+            let deposit_amount = PHEROMONE_DEPOSIT_RATE * delta * youth_multiplier;
+
             if ant.has_food {
                 pheromone_grid.add_pheromone(
                     grid_x,

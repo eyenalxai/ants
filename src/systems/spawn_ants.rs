@@ -28,12 +28,14 @@ pub fn spawn_ants(
             let random_angle = rand::random::<f32>() * 2.0 * PI;
             let lifetime_variation = 0.5 + rand::random::<f32>();
             let speed_variation = 0.5 + rand::random::<f32>();
+            let max_lifetime = ANT_LIFETIME * lifetime_variation;
 
             commands.spawn((
                 Ant {
                     direction: random_angle,
                     has_food: false,
-                    lifetime: ANT_LIFETIME * lifetime_variation,
+                    lifetime: max_lifetime,
+                    max_lifetime,
                     speed: ANT_SPEED * speed_variation,
                 },
                 Sprite {
