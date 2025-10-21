@@ -1,13 +1,13 @@
 use crate::components::{Ant, Food, Nest};
 use crate::constants::{
-    ANT_RANDOM_TURN_CHANCE, ANT_TURN_RATE, PHEROMONE_DEPOSIT_RATE, PHEROMONE_MAX_INTENSITY,
-    WINDOW_HEIGHT, WINDOW_WIDTH,
+    ANT_EXPLORATION_CHANCE, ANT_PHEROMONE_FOLLOW_RANDOMNESS, ANT_RANDOM_TURN_CHANCE, ANT_TURN_RATE,
+    PHEROMONE_DEPOSIT_RATE, PHEROMONE_MAX_INTENSITY, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
-const SENSOR_DISTANCE: f32 = 20.0;
+const SENSOR_DISTANCE: f32 = 40.0;
 const SENSOR_ANGLE: f32 = PI / 3.0;
 const NUM_SENSORS: usize = 5;
 const TARGET_LOCK_DISTANCE: f32 = 40.0;
@@ -79,10 +79,7 @@ pub fn move_ants(
                 }
             }
 
-            if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
-                let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
-                ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
-            } else if total_intensity > 0.01 {
+            if total_intensity > 0.01 && rand::random::<f32>() > ANT_EXPLORATION_CHANCE {
                 let average_direction = weighted_y.atan2(weighted_x);
                 let angle_diff = (average_direction - ant.direction).rem_euclid(2.0 * PI);
                 let shortest_angle = if angle_diff > PI {
@@ -90,9 +87,21 @@ pub fn move_ants(
                 } else {
                     angle_diff
                 };
+
                 let intensity_strength = (total_intensity / 10.0).min(1.0);
-                let max_turn = ANT_TURN_RATE * delta * intensity_strength;
-                let turn_amount = shortest_angle.clamp(-max_turn, max_turn);
+                let exploration_factor = 1.0 - (intensity_strength * 0.7);
+                let random_offset = (rand::random::<f32>() - 0.5)
+                    * 2.0
+                    * ANT_PHEROMONE_FOLLOW_RANDOMNESS
+                    * PI
+                    * exploration_factor;
+
+                let randomized_angle = shortest_angle + random_offset;
+                let max_turn = ANT_TURN_RATE * delta * (0.5 + intensity_strength * 0.5);
+                let turn_amount = randomized_angle.clamp(-max_turn, max_turn);
+                ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
+            } else if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
+                let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
                 ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
             }
         }
