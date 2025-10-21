@@ -13,13 +13,18 @@ use constants::{ANT_SPAWN_INTERVAL, WINDOW_HEIGHT, WINDOW_WIDTH};
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
 use systems::{
-    check_collisions, decay_pheromones, move_ants, setup, spawn_ants, toggle_pheromone_display,
-    update_ant_lifetime, update_pheromone_visuals,
+    check_collisions, decay_pheromones, draw_sensor_cone, move_ants, setup, spawn_ants,
+    toggle_pheromone_display, update_ant_lifetime, update_pheromone_visuals,
 };
 
 #[derive(Resource)]
 pub struct PheromoneDisplayState {
     pub enabled: bool,
+}
+
+#[derive(Resource)]
+pub struct SelectedAnt {
+    pub entity: Option<Entity>,
 }
 
 fn main() {
@@ -41,6 +46,7 @@ fn main() {
             count: 0,
         })
         .insert_resource(PheromoneDisplayState { enabled: false })
+        .insert_resource(SelectedAnt { entity: None })
         .add_systems(Startup, (setup, setup_fps_counter))
         .add_systems(
             Update,
@@ -54,6 +60,7 @@ fn main() {
                 fps_text_update_system,
                 fps_counter_showhide,
                 toggle_pheromone_display,
+                draw_sensor_cone,
             ),
         )
         .run();
