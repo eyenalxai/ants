@@ -9,7 +9,7 @@ mod systems;
 use ant_spawner::AntSpawner;
 use constants::{ANT_SPAWN_INTERVAL, WINDOW_HEIGHT, WINDOW_WIDTH};
 use pheromone::PheromoneGrid;
-use systems::{move_ants, setup, spawn_ants};
+use systems::{check_collisions, move_ants, setup, spawn_ants, update_pheromone_visuals};
 
 fn main() {
     App::new()
@@ -28,6 +28,14 @@ fn main() {
             count: 0,
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (spawn_ants, move_ants))
+        .add_systems(
+            Update,
+            (
+                spawn_ants,
+                move_ants,
+                check_collisions,
+                update_pheromone_visuals,
+            ),
+        )
         .run();
 }
