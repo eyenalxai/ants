@@ -3,8 +3,8 @@ mod sensors;
 mod steering;
 mod wall_collision;
 
-use crate::components::{Ant, Nest};
-use crate::constants::*;
+use crate::components::Ant;
+use crate::constants::SENSOR_DISTANCE;
 use crate::pheromone::PheromoneGrid;
 use crate::resources::FoodCells;
 use bevy::prelude::*;
@@ -18,39 +18,22 @@ pub fn move_ants(
     time: Res<Time>,
     mut pheromone_grid: ResMut<PheromoneGrid>,
     food_cells: Res<FoodCells>,
-    nest_query: Query<&Transform, (With<Nest>, Without<Ant>)>,
 ) {
     let delta = time.delta_secs();
-
-    let food_pos = if !food_cells.cells.is_empty() {
-        let ((grid_x, grid_y), _) = food_cells.cells.iter().next().unwrap();
-        let world_x = *grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-        let world_y = *grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
-        Some(Vec2::new(world_x, world_y))
-    } else {
-        None
-    };
-
-    let nest_pos = nest_query
-        .iter()
-        .next()
-        .map(|t| Vec2::new(t.translation.x, t.translation.y));
 
     for (mut ant, mut transform) in &mut ant_query {
         let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
 
-        let target_pos = if ant.has_food { nest_pos } else { food_pos };
-
-        let should_lock_target = if let Some(target) = target_pos {
-            current_pos.distance(target) < TARGET_LOCK_DISTANCE
-        } else {
-            false
-        };
-
-        if should_lock_target && let Some(target) = target_pos {
-            let to_target = target - current_pos;
-            let target_angle = to_target.y.atan2(to_target.x);
-            ant.direction = target_angle;
+        if !ant.has_food {
+            if let Some(closest_food) =
+                find_closest_food_in_range(&current_pos, &food_cells, &pheromone_grid)
+            {
+                let to_food = closest_food - current_pos;
+                ant.direction = to_food.y.atan2(to_food.x);
+            } else {
+                let sensor_readings = read_sensors(&ant, current_pos, &pheromone_grid);
+                apply_steering(&mut ant, &sensor_readings, delta);
+            }
         } else {
             let sensor_readings = read_sensors(&ant, current_pos, &pheromone_grid);
             apply_steering(&mut ant, &sensor_readings, delta);
@@ -65,4 +48,39 @@ pub fn move_ants(
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
         deposit_pheromone(&ant, pos, &mut pheromone_grid, delta);
     }
+}
+
+fn find_closest_food_in_range(
+    ant_pos: &Vec2,
+    food_cells: &FoodCells,
+    _pheromone_grid: &PheromoneGrid,
+) -> Option<Vec2> {
+    let mut closest_food: Option<(Vec2, f32)> = None;
+
+    for &(grid_x, grid_y) in food_cells.cells.keys() {
+        if let Some(food_world_pos) = grid_to_world(grid_x, grid_y) {
+            let distance = ant_pos.distance(food_world_pos);
+
+            if distance <= SENSOR_DISTANCE {
+                if let Some((_, closest_dist)) = closest_food {
+                    if distance < closest_dist {
+                        closest_food = Some((food_world_pos, distance));
+                    }
+                } else {
+                    closest_food = Some((food_world_pos, distance));
+                }
+            }
+        }
+    }
+
+    closest_food.map(|(pos, _)| pos)
+}
+
+fn grid_to_world(grid_x: usize, grid_y: usize) -> Option<Vec2> {
+    use crate::constants::*;
+
+    let world_x = grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
+    let world_y = grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+
+    Some(Vec2::new(world_x, world_y))
 }
