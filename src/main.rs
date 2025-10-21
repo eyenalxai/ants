@@ -44,6 +44,7 @@ fn main() {
         .insert_resource(SelectedAnt { entity: None })
         .insert_resource(FoodCells {
             cells: HashMap::new(),
+            world_positions: Vec::new(),
         })
         .insert_resource(FoodManagementState { enabled: false })
         .insert_resource(PauseState { paused: false })

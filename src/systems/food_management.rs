@@ -113,6 +113,8 @@ pub fn handle_food_clicks(
         return;
     };
 
+    let mut changed = false;
+
     if mouse_button.pressed(MouseButton::Left) {
         for dy in 0..3 {
             for dx in 0..3 {
@@ -122,6 +124,7 @@ pub fn handle_food_clicks(
                 if gx < GRID_WIDTH && gy < GRID_HEIGHT && !food_cells.cells.contains_key(&(gx, gy))
                 {
                     food_cells.cells.insert((gx, gy), INITIAL_FOOD_AMOUNT);
+                    changed = true;
 
                     let world_x = gx as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
                     let world_y = gy as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
@@ -147,6 +150,7 @@ pub fn handle_food_clicks(
                 let gy = grid_y + dy;
 
                 if food_cells.cells.remove(&(gx, gy)).is_some() {
+                    changed = true;
                     for (entity, marker) in &food_markers {
                         if marker.grid_x == gx && marker.grid_y == gy {
                             commands.entity(entity).despawn();
@@ -156,6 +160,10 @@ pub fn handle_food_clicks(
                 }
             }
         }
+    }
+
+    if changed {
+        food_cells.rebuild_cache();
     }
 }
 
@@ -235,15 +243,18 @@ pub fn update_food_depletion(
         }
     }
 
-    for (grid_x, grid_y) in to_remove {
-        food_cells.cells.remove(&(grid_x, grid_y));
+    if !to_remove.is_empty() {
+        for (grid_x, grid_y) in to_remove {
+            food_cells.cells.remove(&(grid_x, grid_y));
 
-        for (entity, marker) in &food_markers {
-            if marker.grid_x == grid_x && marker.grid_y == grid_y {
-                commands.entity(entity).despawn();
-                break;
+            for (entity, marker) in &food_markers {
+                if marker.grid_x == grid_x && marker.grid_y == grid_y {
+                    commands.entity(entity).despawn();
+                    break;
+                }
             }
         }
+        food_cells.rebuild_cache();
     }
 }
 

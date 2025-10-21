@@ -57,30 +57,19 @@ fn find_closest_food_in_range(
 ) -> Option<Vec2> {
     let mut closest_food: Option<(Vec2, f32)> = None;
 
-    for &(grid_x, grid_y) in food_cells.cells.keys() {
-        if let Some(food_world_pos) = grid_to_world(grid_x, grid_y) {
-            let distance = ant_pos.distance(food_world_pos);
+    for &food_world_pos in &food_cells.world_positions {
+        let distance = ant_pos.distance(food_world_pos);
 
-            if distance <= SENSOR_DISTANCE {
-                if let Some((_, closest_dist)) = closest_food {
-                    if distance < closest_dist {
-                        closest_food = Some((food_world_pos, distance));
-                    }
-                } else {
+        if distance <= SENSOR_DISTANCE {
+            if let Some((_, closest_dist)) = closest_food {
+                if distance < closest_dist {
                     closest_food = Some((food_world_pos, distance));
                 }
+            } else {
+                closest_food = Some((food_world_pos, distance));
             }
         }
     }
 
     closest_food.map(|(pos, _)| pos)
-}
-
-fn grid_to_world(grid_x: usize, grid_y: usize) -> Option<Vec2> {
-    use crate::constants::*;
-
-    let world_x = grid_x as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
-    let world_y = grid_y as f32 * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0 + GRID_SIZE / 2.0;
-
-    Some(Vec2::new(world_x, world_y))
 }

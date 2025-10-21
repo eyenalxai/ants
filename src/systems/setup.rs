@@ -126,5 +126,6 @@ pub fn setup(
                 }
             }
         }
+        food_cells.rebuild_cache();
     }
 }
