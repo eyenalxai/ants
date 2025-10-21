@@ -39,3 +39,9 @@ pub struct FoodManagementState {
 pub struct PauseState {
     pub paused: bool,
 }
+
+#[derive(Resource)]
+pub struct NestManagementState {
+    pub enabled: bool,
+    pub dragging: bool,
+}

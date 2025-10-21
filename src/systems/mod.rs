@@ -1,6 +1,7 @@
 mod collision;
 mod food_management;
 mod movement;
+mod nest_management;
 mod pause;
 mod pheromone_decay;
 mod pheromone_toggle;
@@ -15,6 +16,9 @@ pub use food_management::{
     update_food_depletion, update_food_visuals,
 };
 pub use movement::move_ants;
+pub use nest_management::{
+    handle_nest_drag, setup_nest_button, toggle_nest_management, update_nest_cursor,
+};
 pub use pause::{setup_pause_button, toggle_pause};
 pub use pheromone_decay::decay_pheromones;
 pub use pheromone_toggle::toggle_pheromone_display;

@@ -14,12 +14,16 @@ use ant_spawner::AntSpawner;
 use constants::*;
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
-use resources::{FoodCells, FoodManagementState, PauseState, PheromoneDisplayState, SelectedAnt};
+use resources::{
+    FoodCells, FoodManagementState, NestManagementState, PauseState, PheromoneDisplayState,
+    SelectedAnt,
+};
 use systems::{
-    check_collisions, decay_pheromones, draw_sensor_cone, handle_food_clicks, move_ants, setup,
-    setup_food_button, setup_pause_button, spawn_ants, toggle_food_management, toggle_pause,
-    toggle_pheromone_display, update_ant_lifetime, update_food_cursor, update_food_depletion,
-    update_food_visuals, update_pheromone_visuals,
+    check_collisions, decay_pheromones, draw_sensor_cone, handle_food_clicks, handle_nest_drag,
+    move_ants, setup, setup_food_button, setup_nest_button, setup_pause_button, spawn_ants,
+    toggle_food_management, toggle_nest_management, toggle_pause, toggle_pheromone_display,
+    update_ant_lifetime, update_food_cursor, update_food_depletion, update_food_visuals,
+    update_nest_cursor, update_pheromone_visuals,
 };
 
 fn main() {
@@ -47,6 +51,10 @@ fn main() {
             world_positions: Vec::new(),
         })
         .insert_resource(FoodManagementState { enabled: false })
+        .insert_resource(NestManagementState {
+            enabled: false,
+            dragging: false,
+        })
         .insert_resource(PauseState { paused: false })
         .add_systems(
             Startup,
@@ -55,6 +63,7 @@ fn main() {
                 setup_fps_counter,
                 setup_pause_button,
                 setup_food_button,
+                setup_nest_button,
             ),
         )
         .add_systems(
@@ -76,6 +85,9 @@ fn main() {
                 handle_food_clicks,
                 update_food_depletion,
                 update_food_visuals,
+                toggle_nest_management,
+                update_nest_cursor,
+                handle_nest_drag,
             ),
         )
         .run();
