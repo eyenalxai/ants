@@ -57,7 +57,7 @@ pub fn setup(
                 let gy = food_grid_y + dy;
 
                 if gx < GRID_WIDTH && gy < GRID_HEIGHT {
-                    food_cells.cells.push((gx, gy));
+                    food_cells.cells.insert((gx, gy), INITIAL_FOOD_AMOUNT);
 
                     let world_x =
                         gx as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;

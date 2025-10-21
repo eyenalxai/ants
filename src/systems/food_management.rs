@@ -2,6 +2,7 @@ use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
 use crate::resources::{FoodCells, FoodManagementState};
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 #[derive(Component)]
 pub struct FoodManagementButton;
@@ -63,6 +64,7 @@ pub fn toggle_food_management(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle_food_clicks(
     mut commands: Commands,
     mouse_button: Res<ButtonInput<MouseButton>>,
@@ -117,8 +119,9 @@ pub fn handle_food_clicks(
                 let gx = grid_x + dx;
                 let gy = grid_y + dy;
 
-                if gx < GRID_WIDTH && gy < GRID_HEIGHT && !food_cells.cells.contains(&(gx, gy)) {
-                    food_cells.cells.push((gx, gy));
+                if gx < GRID_WIDTH && gy < GRID_HEIGHT && !food_cells.cells.contains_key(&(gx, gy))
+                {
+                    food_cells.cells.insert((gx, gy), INITIAL_FOOD_AMOUNT);
 
                     let world_x =
                         gx as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
@@ -145,9 +148,7 @@ pub fn handle_food_clicks(
                 let gx = grid_x + dx;
                 let gy = grid_y + dy;
 
-                if let Some(pos) = food_cells.cells.iter().position(|&cell| cell == (gx, gy)) {
-                    food_cells.cells.remove(pos);
-
+                if food_cells.cells.remove(&(gx, gy)).is_some() {
                     for (entity, marker) in &food_markers {
                         if marker.grid_x == gx && marker.grid_y == gy {
                             commands.entity(entity).despawn();
@@ -221,4 +222,46 @@ pub fn update_food_cursor(
         },
         Transform::from_xyz(center_x, center_y, 0.6),
     ));
+}
+
+pub fn update_food_depletion(
+    mut commands: Commands,
+    mut food_cells: ResMut<FoodCells>,
+    food_markers: Query<(Entity, &FoodMarker)>,
+) {
+    let mut to_remove = HashSet::new();
+
+    for (&(grid_x, grid_y), &amount) in food_cells.cells.iter() {
+        if amount <= 0.0 {
+            to_remove.insert((grid_x, grid_y));
+        }
+    }
+
+    for (grid_x, grid_y) in to_remove {
+        food_cells.cells.remove(&(grid_x, grid_y));
+
+        for (entity, marker) in &food_markers {
+            if marker.grid_x == grid_x && marker.grid_y == grid_y {
+                commands.entity(entity).despawn();
+                break;
+            }
+        }
+    }
+}
+
+pub fn update_food_visuals(
+    food_cells: Res<FoodCells>,
+    mut food_markers: Query<(&FoodMarker, &MeshMaterial2d<ColorMaterial>)>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for (marker, material_handle) in &mut food_markers {
+        if let Some(&amount) = food_cells.cells.get(&(marker.grid_x, marker.grid_y)) {
+            let opacity = (amount / INITIAL_FOOD_AMOUNT).clamp(0.0, 1.0);
+            let color = Color::srgba(0.2, 0.8, 0.2, opacity);
+
+            if let Some(material) = materials.get_mut(material_handle.id()) {
+                material.color = color;
+            }
+        }
+    }
 }

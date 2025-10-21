@@ -1,5 +1,6 @@
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 mod ant_spawner;
 mod components;
@@ -17,7 +18,8 @@ use resources::{FoodCells, FoodManagementState, PheromoneDisplayState, SelectedA
 use systems::{
     check_collisions, decay_pheromones, draw_sensor_cone, handle_food_clicks, move_ants, setup,
     setup_food_button, spawn_ants, toggle_food_management, toggle_pheromone_display,
-    update_ant_lifetime, update_food_cursor, update_pheromone_visuals,
+    update_ant_lifetime, update_food_cursor, update_food_depletion, update_food_visuals,
+    update_pheromone_visuals,
 };
 
 fn main() {
@@ -40,7 +42,9 @@ fn main() {
         })
         .insert_resource(PheromoneDisplayState { enabled: false })
         .insert_resource(SelectedAnt { entity: None })
-        .insert_resource(FoodCells { cells: vec![] })
+        .insert_resource(FoodCells {
+            cells: HashMap::new(),
+        })
         .insert_resource(FoodManagementState { enabled: false })
         .add_systems(Startup, (setup, setup_fps_counter, setup_food_button))
         .add_systems(
@@ -59,6 +63,8 @@ fn main() {
                 toggle_food_management,
                 update_food_cursor,
                 handle_food_clicks,
+                update_food_depletion,
+                update_food_visuals,
             ),
         )
         .run();

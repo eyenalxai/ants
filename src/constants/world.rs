@@ -12,3 +12,6 @@ pub const FOOD_X: f32 = 320.0;
 pub const FOOD_Y: f32 = 0.0;
 
 pub const WALL_BOUNCE_MIN_ANGLE: f32 = 30.0;
+
+pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
+pub const FOOD_DEPLETION_RATE: f32 = 0.2;

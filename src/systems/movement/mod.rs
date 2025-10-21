@@ -23,9 +23,9 @@ pub fn move_ants(
     let delta = time.delta_secs();
 
     let food_pos = if !food_cells.cells.is_empty() {
-        let (grid_x, grid_y) = food_cells.cells[0];
-        let world_x = grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
-        let world_y = grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
+        let ((grid_x, grid_y), _) = food_cells.cells.iter().next().unwrap();
+        let world_x = *grid_x as f32 * GRID_SIZE - WINDOW_WIDTH as f32 / 2.0 + GRID_SIZE / 2.0;
+        let world_y = *grid_y as f32 * GRID_SIZE - WINDOW_HEIGHT as f32 / 2.0 + GRID_SIZE / 2.0;
         Some(Vec2::new(world_x, world_y))
     } else {
         None
