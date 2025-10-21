@@ -1,7 +1,7 @@
 use crate::components::{Ant, Food, Nest};
 use crate::constants::{
-    ANT_RANDOM_TURN_CHANCE, ANT_SPEED, ANT_TURN_RATE, PHEROMONE_DEPOSIT_RATE,
-    PHEROMONE_MAX_INTENSITY, WINDOW_HEIGHT, WINDOW_WIDTH,
+    ANT_RANDOM_TURN_CHANCE, ANT_TURN_RATE, PHEROMONE_DEPOSIT_RATE, PHEROMONE_MAX_INTENSITY,
+    WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
@@ -97,7 +97,7 @@ pub fn move_ants(
             }
         }
 
-        let velocity = Vec2::new(ant.direction.cos(), ant.direction.sin()) * ANT_SPEED;
+        let velocity = Vec2::new(ant.direction.cos(), ant.direction.sin()) * ant.speed;
         transform.translation.x += velocity.x * delta;
         transform.translation.y += velocity.y * delta;
 

@@ -1,6 +1,6 @@
 use crate::ant_spawner::AntSpawner;
 use crate::components::{Ant, Nest};
-use crate::constants::{ANT_BATCH_SIZE, ANT_LIFETIME, MAX_ANTS};
+use crate::constants::{ANT_BATCH_SIZE, ANT_LIFETIME, ANT_SPEED, MAX_ANTS};
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
@@ -26,12 +26,15 @@ pub fn spawn_ants(
 
         for _ in 0..batch_size {
             let random_angle = rand::random::<f32>() * 2.0 * PI;
+            let lifetime_variation = 0.5 + rand::random::<f32>();
+            let speed_variation = 0.5 + rand::random::<f32>();
 
             commands.spawn((
                 Ant {
                     direction: random_angle,
                     has_food: false,
-                    lifetime: ANT_LIFETIME,
+                    lifetime: ANT_LIFETIME * lifetime_variation,
+                    speed: ANT_SPEED * speed_variation,
                 },
                 Sprite {
                     color: Color::srgb(0.1, 0.1, 0.1),
