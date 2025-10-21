@@ -6,6 +6,10 @@ use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
+const SENSOR_DISTANCE: f32 = 20.0;
+const SENSOR_ANGLE: f32 = PI / 4.0;
+const NUM_SENSORS: usize = 5;
+
 pub fn move_ants(
     mut ant_query: Query<(&mut Ant, &mut Transform)>,
     time: Res<Time>,
@@ -17,10 +21,48 @@ pub fn move_ants(
     let delta = time.delta_secs();
 
     for (mut ant, mut transform) in &mut ant_query {
-        if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
+        let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
+
+        let mut best_direction = ant.direction;
+        let mut best_intensity = 0.0;
+
+        for i in 0..NUM_SENSORS {
+            let angle_offset =
+                -SENSOR_ANGLE + (i as f32 / (NUM_SENSORS - 1) as f32) * (2.0 * SENSOR_ANGLE);
+            let check_angle = ant.direction + angle_offset;
+
+            let sensor_pos = current_pos
+                + Vec2::new(
+                    check_angle.cos() * SENSOR_DISTANCE,
+                    check_angle.sin() * SENSOR_DISTANCE,
+                );
+
+            if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(sensor_pos)
+                && let Some(pheromone) = pheromone_grid.get(grid_x, grid_y)
+            {
+                let intensity = if ant.has_food {
+                    pheromone.to_nest
+                } else {
+                    pheromone.to_food
+                };
+
+                if intensity > best_intensity {
+                    best_intensity = intensity;
+                    best_direction = check_angle;
+                }
+            }
+        }
+
+        if best_intensity > 0.1 {
+            let angle_diff = (best_direction - ant.direction).rem_euclid(2.0 * PI);
+            let turn_direction = if angle_diff > PI { -1.0 } else { 1.0 };
+            let turn_amount = turn_direction * ANT_TURN_RATE * delta;
+            ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
+        } else if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
             let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
             ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
         }
+
         let velocity = Vec2::new(ant.direction.cos(), ant.direction.sin()) * ANT_SPEED;
         transform.translation.x += velocity.x * delta;
         transform.translation.y += velocity.y * delta;
