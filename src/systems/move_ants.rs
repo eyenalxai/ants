@@ -1,6 +1,7 @@
 use crate::components::{Ant, Food, Nest};
 use crate::constants::{
-    ANT_RANDOM_TURN_CHANCE, ANT_SPEED, ANT_TURN_RATE, WINDOW_HEIGHT, WINDOW_WIDTH,
+    ANT_RANDOM_TURN_CHANCE, ANT_SPEED, ANT_TURN_RATE, PHEROMONE_DEPOSIT_RATE,
+    PHEROMONE_MAX_INTENSITY, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
@@ -144,13 +145,24 @@ pub fn move_ants(
         }
 
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(pos)
-            && let Some(cell) = pheromone_grid.get_mut(grid_x, grid_y)
-        {
+        if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(pos) {
+            let deposit_amount = PHEROMONE_DEPOSIT_RATE * delta;
             if ant.has_food {
-                cell.to_food += 0.1;
+                pheromone_grid.add_pheromone(
+                    grid_x,
+                    grid_y,
+                    deposit_amount,
+                    0.0,
+                    PHEROMONE_MAX_INTENSITY,
+                );
             } else {
-                cell.to_nest += 0.1;
+                pheromone_grid.add_pheromone(
+                    grid_x,
+                    grid_y,
+                    0.0,
+                    deposit_amount,
+                    PHEROMONE_MAX_INTENSITY,
+                );
             }
         }
     }

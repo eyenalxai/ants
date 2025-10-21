@@ -38,6 +38,20 @@ impl PheromoneGrid {
         self.cells.get_mut(y).and_then(|row| row.get_mut(x))
     }
 
+    pub fn add_pheromone(
+        &mut self,
+        x: usize,
+        y: usize,
+        to_food: f32,
+        to_nest: f32,
+        max_intensity: f32,
+    ) {
+        if let Some(cell) = self.get_mut(x, y) {
+            cell.to_food = (cell.to_food + to_food).min(max_intensity);
+            cell.to_nest = (cell.to_nest + to_nest).min(max_intensity);
+        }
+    }
+
     pub fn apply_decay(&mut self, decay_rate: f32, delta_time: f32) {
         let decay_factor = decay_rate.powf(delta_time * 60.0);
 
