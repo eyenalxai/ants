@@ -37,4 +37,15 @@ impl PheromoneGrid {
     pub fn get_mut(&mut self, x: usize, y: usize) -> Option<&mut Pheromone> {
         self.cells.get_mut(y).and_then(|row| row.get_mut(x))
     }
+
+    pub fn apply_decay(&mut self, decay_rate: f32, delta_time: f32) {
+        let decay_factor = decay_rate.powf(delta_time * 60.0);
+
+        for row in &mut self.cells {
+            for pheromone in row {
+                pheromone.to_food *= decay_factor;
+                pheromone.to_nest *= decay_factor;
+            }
+        }
+    }
 }
