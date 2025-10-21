@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use std::f32::consts::PI;
 
 const SENSOR_DISTANCE: f32 = 20.0;
-const SENSOR_ANGLE: f32 = PI / 4.0;
+const SENSOR_ANGLE: f32 = PI / 3.0;
 const NUM_SENSORS: usize = 5;
 const TARGET_LOCK_DISTANCE: f32 = 40.0;
 
@@ -48,8 +48,9 @@ pub fn move_ants(
             let target_angle = to_target.y.atan2(to_target.x);
             ant.direction = target_angle;
         } else {
-            let mut best_direction = ant.direction;
-            let mut best_intensity = 0.0;
+            let mut total_intensity = 0.0;
+            let mut weighted_x = 0.0;
+            let mut weighted_y = 0.0;
 
             for i in 0..NUM_SENSORS {
                 let angle_offset =
@@ -71,24 +72,24 @@ pub fn move_ants(
                         pheromone.to_food
                     };
 
-                    if intensity > best_intensity {
-                        best_intensity = intensity;
-                        best_direction = check_angle;
-                    }
+                    total_intensity += intensity;
+                    weighted_x += check_angle.cos() * intensity;
+                    weighted_y += check_angle.sin() * intensity;
                 }
             }
 
             if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
                 let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
                 ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
-            } else if best_intensity > 0.01 {
-                let angle_diff = (best_direction - ant.direction).rem_euclid(2.0 * PI);
+            } else if total_intensity > 0.01 {
+                let average_direction = weighted_y.atan2(weighted_x);
+                let angle_diff = (average_direction - ant.direction).rem_euclid(2.0 * PI);
                 let shortest_angle = if angle_diff > PI {
                     angle_diff - 2.0 * PI
                 } else {
                     angle_diff
                 };
-                let intensity_strength = (best_intensity / 10.0).min(1.0);
+                let intensity_strength = (total_intensity / 10.0).min(1.0);
                 let max_turn = ANT_TURN_RATE * delta * intensity_strength;
                 let turn_amount = shortest_angle.clamp(-max_turn, max_turn);
                 ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
