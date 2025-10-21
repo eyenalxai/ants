@@ -10,7 +10,8 @@ use ant_spawner::AntSpawner;
 use constants::{ANT_SPAWN_INTERVAL, WINDOW_HEIGHT, WINDOW_WIDTH};
 use pheromone::PheromoneGrid;
 use systems::{
-    check_collisions, decay_pheromones, move_ants, setup, spawn_ants, update_pheromone_visuals,
+    check_collisions, decay_pheromones, move_ants, setup, spawn_ants, update_ant_lifetime,
+    update_pheromone_visuals,
 };
 
 fn main() {
@@ -33,6 +34,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                update_ant_lifetime,
                 spawn_ants,
                 move_ants,
                 check_collisions,

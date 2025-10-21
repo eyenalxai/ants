@@ -9,3 +9,4 @@ pub const ANT_SPEED: f32 = 50.0;
 pub const PHEROMONE_DECAY_RATE: f32 = 0.995;
 pub const ANT_TURN_RATE: f32 = 3.0;
 pub const ANT_RANDOM_TURN_CHANCE: f32 = 0.8;
+pub const ANT_LIFETIME: f32 = 60.0;

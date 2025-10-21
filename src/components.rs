@@ -10,6 +10,7 @@ pub struct Food;
 pub struct Ant {
     pub direction: f32,
     pub has_food: bool,
+    pub lifetime: f32,
 }
 
 #[derive(Component)]

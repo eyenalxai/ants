@@ -1,6 +1,6 @@
 use crate::ant_spawner::AntSpawner;
 use crate::components::{Ant, Nest};
-use crate::constants::MAX_ANTS;
+use crate::constants::{ANT_LIFETIME, MAX_ANTS};
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
@@ -9,8 +9,11 @@ pub fn spawn_ants(
     mut spawner: ResMut<AntSpawner>,
     time: Res<Time>,
     nest_query: Query<&Transform, With<Nest>>,
+    ant_query: Query<&Ant>,
 ) {
-    if spawner.count >= MAX_ANTS {
+    let current_ant_count = ant_query.iter().count();
+
+    if current_ant_count >= MAX_ANTS {
         return;
     }
 
@@ -19,7 +22,7 @@ pub fn spawn_ants(
     if spawner.timer.just_finished()
         && let Ok(nest_transform) = nest_query.single()
     {
-        let batch_size = 10.min(MAX_ANTS - spawner.count);
+        let batch_size = 10.min(MAX_ANTS - current_ant_count);
 
         for _ in 0..batch_size {
             let random_angle = rand::random::<f32>() * 2.0 * PI;
@@ -28,6 +31,7 @@ pub fn spawn_ants(
                 Ant {
                     direction: random_angle,
                     has_food: false,
+                    lifetime: ANT_LIFETIME,
                 },
                 Sprite {
                     color: Color::srgb(0.1, 0.1, 0.1),
@@ -42,6 +46,20 @@ pub fn spawn_ants(
             ));
 
             spawner.count += 1;
+        }
+    }
+}
+
+pub fn update_ant_lifetime(
+    mut commands: Commands,
+    mut ant_query: Query<(Entity, &mut Ant)>,
+    time: Res<Time>,
+) {
+    for (entity, mut ant) in &mut ant_query {
+        ant.lifetime -= time.delta_secs();
+
+        if ant.lifetime <= 0.0 {
+            commands.entity(entity).despawn();
         }
     }
 }
