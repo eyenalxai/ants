@@ -1,5 +1,6 @@
 use crate::components::{Ant, Food, Nest};
 use bevy::prelude::*;
+use std::f32::consts::PI;
 
 pub fn check_collisions(
     mut ant_query: Query<(&mut Ant, &Transform)>,
@@ -22,8 +23,10 @@ pub fn check_collisions(
 
         if !ant.has_food && ant_pos.distance(food_pos) < food_radius {
             ant.has_food = true;
+            ant.direction = (ant.direction + PI).rem_euclid(2.0 * PI);
         } else if ant.has_food && ant_pos.distance(nest_pos) < nest_radius {
             ant.has_food = false;
+            ant.direction = (ant.direction + PI).rem_euclid(2.0 * PI);
         }
     }
 }
