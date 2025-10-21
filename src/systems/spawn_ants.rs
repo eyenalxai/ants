@@ -1,6 +1,6 @@
 use crate::ant_spawner::AntSpawner;
 use crate::components::{Ant, Nest};
-use crate::constants::{ANT_LIFETIME, MAX_ANTS};
+use crate::constants::{ANT_BATCH_SIZE, ANT_LIFETIME, MAX_ANTS};
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
@@ -22,7 +22,7 @@ pub fn spawn_ants(
     if spawner.timer.just_finished()
         && let Ok(nest_transform) = nest_query.single()
     {
-        let batch_size = 10.min(MAX_ANTS - current_ant_count);
+        let batch_size = ANT_BATCH_SIZE.min(MAX_ANTS - current_ant_count);
 
         for _ in 0..batch_size {
             let random_angle = rand::random::<f32>() * 2.0 * PI;

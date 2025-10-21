@@ -5,6 +5,7 @@ pub const GRID_WIDTH: usize = (WINDOW_WIDTH as f32 / GRID_SIZE) as usize;
 pub const GRID_HEIGHT: usize = (WINDOW_HEIGHT as f32 / GRID_SIZE) as usize;
 pub const MAX_ANTS: usize = 10000;
 pub const ANT_SPAWN_INTERVAL: f32 = 0.05;
+pub const ANT_BATCH_SIZE: usize = 100;
 pub const ANT_SPEED: f32 = 50.0;
 pub const PHEROMONE_DECAY_RATE: f32 = 0.995;
 pub const PHEROMONE_DEPOSIT_RATE: f32 = 5.0;
