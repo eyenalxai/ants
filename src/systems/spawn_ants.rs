@@ -39,7 +39,7 @@ pub fn spawn_ants(
                     speed: ANT_SPEED * speed_variation,
                 },
                 Sprite {
-                    color: Color::srgb(0.1, 0.1, 0.1),
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.01),
                     custom_size: Some(Vec2::new(2.0, 2.0)),
                     ..default()
                 },

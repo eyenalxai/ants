@@ -3,7 +3,13 @@ use crate::constants::{GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, WINDOW_HEIGHT, WINDOW
 use bevy::prelude::*;
 
 pub fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera2d,
+        Camera {
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
+            ..default()
+        },
+    ));
 
     for y in 0..GRID_HEIGHT {
         for x in 0..GRID_WIDTH {

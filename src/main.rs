@@ -13,9 +13,14 @@ use constants::{ANT_SPAWN_INTERVAL, WINDOW_HEIGHT, WINDOW_WIDTH};
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
 use systems::{
-    check_collisions, decay_pheromones, move_ants, setup, spawn_ants, update_ant_lifetime,
-    update_pheromone_visuals,
+    check_collisions, decay_pheromones, move_ants, setup, spawn_ants, toggle_pheromone_display,
+    update_ant_lifetime, update_pheromone_visuals,
 };
+
+#[derive(Resource)]
+pub struct PheromoneDisplayState {
+    pub enabled: bool,
+}
 
 fn main() {
     App::new()
@@ -35,6 +40,7 @@ fn main() {
             timer: Timer::from_seconds(ANT_SPAWN_INTERVAL, TimerMode::Repeating),
             count: 0,
         })
+        .insert_resource(PheromoneDisplayState { enabled: false })
         .add_systems(Startup, (setup, setup_fps_counter))
         .add_systems(
             Update,
@@ -47,6 +53,7 @@ fn main() {
                 update_pheromone_visuals,
                 fps_text_update_system,
                 fps_counter_showhide,
+                toggle_pheromone_display,
             ),
         )
         .run();
