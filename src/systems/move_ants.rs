@@ -1,5 +1,7 @@
 use crate::components::Ant;
-use crate::constants::{ANT_SPEED, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::constants::{
+    ANT_RANDOM_TURN_CHANCE, ANT_SPEED, ANT_TURN_RATE, WINDOW_HEIGHT, WINDOW_WIDTH,
+};
 use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
@@ -12,11 +14,16 @@ pub fn move_ants(
     let half_width = WINDOW_WIDTH as f32 / 2.0;
     let half_height = WINDOW_HEIGHT as f32 / 2.0;
     let min_angle = 30.0_f32.to_radians();
+    let delta = time.delta_secs();
 
     for (mut ant, mut transform) in &mut ant_query {
+        if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
+            let turn_amount = (rand::random::<f32>() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
+            ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
+        }
         let velocity = Vec2::new(ant.direction.cos(), ant.direction.sin()) * ANT_SPEED;
-        transform.translation.x += velocity.x * time.delta_secs();
-        transform.translation.y += velocity.y * time.delta_secs();
+        transform.translation.x += velocity.x * delta;
+        transform.translation.y += velocity.y * delta;
 
         if transform.translation.x > half_width || transform.translation.x < -half_width {
             if transform.translation.x > half_width {
