@@ -1,5 +1,5 @@
 use crate::components::Ant;
-use crate::{PheromoneDisplayState, SelectedAnt};
+use crate::resources::{PheromoneDisplayState, SelectedAnt};
 use bevy::prelude::*;
 
 pub fn toggle_pheromone_display(

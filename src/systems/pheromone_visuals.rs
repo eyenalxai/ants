@@ -1,7 +1,7 @@
-use crate::PheromoneDisplayState;
 use crate::components::PheromoneCell;
 use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
+use crate::resources::PheromoneDisplayState;
 use bevy::prelude::*;
 
 pub fn update_pheromone_visuals(

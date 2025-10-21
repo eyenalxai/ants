@@ -1,6 +1,6 @@
-use crate::SelectedAnt;
 use crate::components::Ant;
 use crate::constants::*;
+use crate::resources::SelectedAnt;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 

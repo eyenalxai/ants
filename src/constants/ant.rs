@@ -1,0 +1,22 @@
+pub const MAX_ANTS: usize = 30000;
+pub const ANT_SPAWN_INTERVAL: f32 = 0.05;
+pub const ANT_BATCH_SIZE: usize = 100;
+pub const ANT_SPEED: f32 = 50.0;
+pub const ANT_SIZE: f32 = 2.0;
+pub const ANT_ALPHA: f32 = 0.005;
+pub const ANT_LIFETIME: f32 = 30.0;
+pub const ANT_LIFETIME_VARIATION_MIN: f32 = 0.5;
+pub const ANT_SPEED_VARIATION_MIN: f32 = 0.5;
+pub const ANT_YOUTH_DEPOSIT_MIN: f32 = 0.2;
+pub const ANT_YOUTH_DEPOSIT_MAX: f32 = 0.8;
+
+pub const ANT_TURN_RATE: f32 = 9.0;
+pub const ANT_RANDOM_TURN_CHANCE: f32 = 0.8;
+pub const ANT_PHEROMONE_FOLLOW_RANDOMNESS: f32 = 0.5;
+pub const ANT_EXPLORATION_CHANCE: f32 = 0.2;
+pub const ANT_PROBABILISTIC_STEERING_CHANCE: f32 = 0.6;
+pub const ANT_STEERING_NOISE_FACTOR: f32 = 0.8;
+pub const ANT_TURN_INTENSITY_BASE: f32 = 0.6;
+pub const ANT_TURN_INTENSITY_SCALE: f32 = 0.4;
+pub const ANT_EXPLORATION_STRENGTH_BASE: f32 = 0.6;
+

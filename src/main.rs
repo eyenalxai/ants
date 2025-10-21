@@ -6,26 +6,18 @@ mod components;
 mod constants;
 mod fps_counter;
 mod pheromone;
+mod resources;
 mod systems;
 
 use ant_spawner::AntSpawner;
 use constants::*;
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
+use resources::{PheromoneDisplayState, SelectedAnt};
 use systems::{
     check_collisions, decay_pheromones, draw_sensor_cone, move_ants, setup, spawn_ants,
     toggle_pheromone_display, update_ant_lifetime, update_pheromone_visuals,
 };
-
-#[derive(Resource)]
-pub struct PheromoneDisplayState {
-    pub enabled: bool,
-}
-
-#[derive(Resource)]
-pub struct SelectedAnt {
-    pub entity: Option<Entity>,
-}
 
 fn main() {
     App::new()
