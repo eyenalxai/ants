@@ -19,3 +19,4 @@ pub const WALL_THICKNESS: f32 = 2.0;
 
 pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
 pub const FOOD_DEPLETION_RATE: f32 = 0.005;
+pub const FOOD_CELL_RADIUS: f32 = GRID_SIZE * 0.3;

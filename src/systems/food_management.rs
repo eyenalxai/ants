@@ -131,7 +131,7 @@ pub fn handle_food_clicks(
                             grid_x: gx,
                             grid_y: gy,
                         },
-                        Mesh2d(meshes.add(Circle::new(GRID_SIZE / 2.0))),
+                        Mesh2d(meshes.add(Circle::new(FOOD_CELL_RADIUS))),
                         MeshMaterial2d(
                             materials.add(ColorMaterial::from_color(Color::srgb(0.2, 0.8, 0.2))),
                         ),
