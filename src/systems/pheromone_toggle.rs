@@ -14,7 +14,7 @@ pub fn toggle_pheromone_display(
         if display_state.enabled {
             let ants: Vec<Entity> = ant_query.iter().collect();
             if !ants.is_empty() {
-                let random_index = (rand::random::<f32>() * ants.len() as f32) as usize;
+                let random_index = (fastrand::f32() * ants.len() as f32) as usize;
                 selected_ant.entity = Some(ants[random_index]);
             }
         } else {

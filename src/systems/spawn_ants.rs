@@ -25,9 +25,9 @@ pub fn spawn_ants(
         let batch_size = ANT_BATCH_SIZE.min(MAX_ANTS - current_ant_count);
 
         for _ in 0..batch_size {
-            let random_angle = rand::random::<f32>() * 2.0 * PI;
-            let lifetime_variation = ANT_LIFETIME_VARIATION_MIN + rand::random::<f32>();
-            let speed_variation = ANT_SPEED_VARIATION_MIN + rand::random::<f32>();
+            let random_angle = fastrand::f32() * 2.0 * PI;
+            let lifetime_variation = ANT_LIFETIME_VARIATION_MIN + fastrand::f32();
+            let speed_variation = ANT_SPEED_VARIATION_MIN + fastrand::f32();
             let max_lifetime = ANT_LIFETIME * lifetime_variation;
 
             commands.spawn((

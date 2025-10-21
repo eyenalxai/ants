@@ -78,7 +78,7 @@ pub fn draw_sensor_cone(
 
         let ants: Vec<Entity> = ant_query.iter().map(|(e, _, _)| e).collect();
         if !ants.is_empty() {
-            let random_index = (rand::random::<f32>() * ants.len() as f32) as usize;
+            let random_index = (fastrand::f32() * ants.len() as f32) as usize;
             selected_ant.entity = Some(ants[random_index]);
         }
     }
