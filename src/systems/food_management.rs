@@ -111,8 +111,7 @@ pub fn handle_food_clicks(
         return;
     };
 
-    if mouse_button.just_pressed(MouseButton::Left) && !food_cells.cells.contains(&(grid_x, grid_y))
-    {
+    if mouse_button.pressed(MouseButton::Left) {
         for dy in 0..3 {
             for dx in 0..3 {
                 let gx = grid_x + dx;
@@ -140,7 +139,7 @@ pub fn handle_food_clicks(
                 }
             }
         }
-    } else if mouse_button.just_pressed(MouseButton::Right) {
+    } else if mouse_button.pressed(MouseButton::Right) {
         for dy in 0..3 {
             for dx in 0..3 {
                 let gx = grid_x + dx;
