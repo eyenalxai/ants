@@ -13,7 +13,7 @@ use ant_spawner::AntSpawner;
 use constants::*;
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
-use resources::{PheromoneDisplayState, SelectedAnt};
+use resources::{FoodCells, PheromoneDisplayState, SelectedAnt};
 use systems::{
     check_collisions, decay_pheromones, draw_sensor_cone, move_ants, setup, spawn_ants,
     toggle_pheromone_display, update_ant_lifetime, update_pheromone_visuals,
@@ -39,6 +39,7 @@ fn main() {
         })
         .insert_resource(PheromoneDisplayState { enabled: false })
         .insert_resource(SelectedAnt { entity: None })
+        .insert_resource(FoodCells { cells: vec![] })
         .add_systems(Startup, (setup, setup_fps_counter))
         .add_systems(
             Update,

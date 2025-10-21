@@ -4,9 +4,6 @@ use bevy::prelude::*;
 pub struct Nest;
 
 #[derive(Component)]
-pub struct Food;
-
-#[derive(Component)]
 pub struct Ant {
     pub direction: f32,
     pub has_food: bool,

@@ -1,30 +1,29 @@
-use crate::components::{Ant, Food, Nest};
+use crate::components::{Ant, Nest};
 use crate::constants::*;
 use crate::pheromone::PheromoneGrid;
+use crate::resources::FoodCells;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
 pub fn check_collisions(
     mut ant_query: Query<(&mut Ant, &Transform)>,
-    food_query: Query<&Transform, With<Food>>,
     nest_query: Query<&Transform, With<Nest>>,
+    food_cells: Res<FoodCells>,
     pheromone_grid: Res<PheromoneGrid>,
 ) {
-    let Some(food_transform) = food_query.iter().next() else {
-        return;
-    };
     let Some(nest_transform) = nest_query.iter().next() else {
         return;
     };
-    let food_pos = Vec2::new(food_transform.translation.x, food_transform.translation.y);
     let nest_pos = Vec2::new(nest_transform.translation.x, nest_transform.translation.y);
-    let food_radius = FOOD_SIZE / 2.0;
     let nest_radius = NEST_SIZE / 2.0;
 
     for (mut ant, transform) in &mut ant_query {
         let ant_pos = Vec2::new(transform.translation.x, transform.translation.y);
 
-        if !ant.has_food && ant_pos.distance(food_pos) < food_radius {
+        if !ant.has_food
+            && let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(ant_pos)
+            && food_cells.cells.contains(&(grid_x, grid_y))
+        {
             ant.has_food = true;
             ant.direction = find_best_direction(&ant, ant_pos, &pheromone_grid);
         } else if ant.has_food && ant_pos.distance(nest_pos) < nest_radius {

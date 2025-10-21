@@ -10,3 +10,7 @@ pub struct SelectedAnt {
     pub entity: Option<Entity>,
 }
 
+#[derive(Resource)]
+pub struct FoodCells {
+    pub cells: Vec<(usize, usize)>,
+}
