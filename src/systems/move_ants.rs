@@ -81,7 +81,7 @@ pub fn move_ants(
             }
 
             if total_intensity > 0.01 && rand::random::<f32>() > ANT_EXPLORATION_CHANCE {
-                let use_probabilistic = rand::random::<f32>() < 0.5;
+                let use_probabilistic = rand::random::<f32>() < 0.6;
 
                 let target_direction = if use_probabilistic {
                     let random_value = rand::random::<f32>() * total_intensity;
@@ -96,7 +96,7 @@ pub fn move_ants(
                         }
                     }
 
-                    let noise = (rand::random::<f32>() - 0.5) * SENSOR_ANGLE * 0.5;
+                    let noise = (rand::random::<f32>() - 0.5) * SENSOR_ANGLE * 0.8;
                     chosen_angle + noise
                 } else {
                     let mut weighted_x = 0.0;
@@ -118,7 +118,7 @@ pub fn move_ants(
                 };
 
                 let intensity_strength = (total_intensity / 10.0).min(1.0);
-                let exploration_factor = 1.0 - (intensity_strength * 0.7);
+                let exploration_factor = 1.0 - (intensity_strength * 0.6);
                 let random_offset = (rand::random::<f32>() - 0.5)
                     * 2.0
                     * ANT_PHEROMONE_FOLLOW_RANDOMNESS
@@ -126,7 +126,7 @@ pub fn move_ants(
                     * exploration_factor;
 
                 let randomized_angle = shortest_angle + random_offset;
-                let max_turn = ANT_TURN_RATE * delta * (0.5 + intensity_strength * 0.5);
+                let max_turn = ANT_TURN_RATE * delta * (0.6 + intensity_strength * 0.4);
                 let turn_amount = randomized_angle.clamp(-max_turn, max_turn);
                 ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
             } else if rand::random::<f32>() < ANT_RANDOM_TURN_CHANCE {
