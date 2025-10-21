@@ -1,0 +1,21 @@
+use crate::components::PheromoneCell;
+use crate::pheromone::PheromoneGrid;
+use bevy::prelude::*;
+
+pub fn update_pheromone_visuals(
+    mut cell_query: Query<(&PheromoneCell, &mut Sprite)>,
+    pheromone_grid: Res<PheromoneGrid>,
+) {
+    for (cell, mut sprite) in &mut cell_query {
+        if let Some(pheromone) = pheromone_grid.get(cell.grid_x, cell.grid_y) {
+            let to_food_intensity = (pheromone.to_food / 100.0).min(1.0);
+            let to_nest_intensity = (pheromone.to_nest / 100.0).min(1.0);
+
+            let red = to_food_intensity;
+            let blue = to_nest_intensity;
+            let alpha = (to_food_intensity + to_nest_intensity).min(1.0) * 0.5;
+
+            sprite.color = Color::srgba(red, 0.0, blue, alpha);
+        }
+    }
+}
