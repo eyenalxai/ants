@@ -1,11 +1,15 @@
 use crate::components::{Ant, Food, Nest};
+use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
+
+const SENSOR_DISTANCE: f32 = 20.0;
 
 pub fn check_collisions(
     mut ant_query: Query<(&mut Ant, &Transform)>,
     food_query: Query<&Transform, With<Food>>,
     nest_query: Query<&Transform, With<Nest>>,
+    pheromone_grid: Res<PheromoneGrid>,
 ) {
     let Some(food_transform) = food_query.iter().next() else {
         return;
@@ -23,10 +27,47 @@ pub fn check_collisions(
 
         if !ant.has_food && ant_pos.distance(food_pos) < food_radius {
             ant.has_food = true;
-            ant.direction = (ant.direction + PI).rem_euclid(2.0 * PI);
+            ant.direction = find_best_direction(&ant, ant_pos, &pheromone_grid);
         } else if ant.has_food && ant_pos.distance(nest_pos) < nest_radius {
             ant.has_food = false;
-            ant.direction = (ant.direction + PI).rem_euclid(2.0 * PI);
+            ant.direction = find_best_direction(&ant, ant_pos, &pheromone_grid);
         }
+    }
+}
+
+fn find_best_direction(ant: &Ant, current_pos: Vec2, pheromone_grid: &PheromoneGrid) -> f32 {
+    let mut total_intensity = 0.0;
+    let mut weighted_x = 0.0;
+    let mut weighted_y = 0.0;
+    let full_scan_sensors = 16;
+
+    for i in 0..full_scan_sensors {
+        let check_angle = (i as f32 / full_scan_sensors as f32) * 2.0 * PI;
+
+        let sensor_pos = current_pos
+            + Vec2::new(
+                check_angle.cos() * SENSOR_DISTANCE,
+                check_angle.sin() * SENSOR_DISTANCE,
+            );
+
+        if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(sensor_pos)
+            && let Some(pheromone) = pheromone_grid.get(grid_x, grid_y)
+        {
+            let intensity = if ant.has_food {
+                pheromone.to_nest
+            } else {
+                pheromone.to_food
+            };
+
+            total_intensity += intensity;
+            weighted_x += check_angle.cos() * intensity;
+            weighted_y += check_angle.sin() * intensity;
+        }
+    }
+
+    if total_intensity > 0.01 {
+        weighted_y.atan2(weighted_x)
+    } else {
+        (ant.direction + PI).rem_euclid(2.0 * PI)
     }
 }
