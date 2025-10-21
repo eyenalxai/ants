@@ -146,9 +146,9 @@ pub fn move_ants(
             && let Some(cell) = pheromone_grid.get_mut(grid_x, grid_y)
         {
             if ant.has_food {
-                cell.to_food += 1.0;
+                cell.to_food += 0.1;
             } else {
-                cell.to_nest += 1.0;
+                cell.to_nest += 0.1;
             }
         }
     }
