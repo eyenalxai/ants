@@ -43,25 +43,29 @@ pub fn spawn_ants(
     if spawner.timer.just_finished()
         && let Ok(nest_transform) = nest_query.single()
     {
-        let random_angle = rand::random::<f32>() * 2.0 * PI;
+        let batch_size = 10.min(MAX_ANTS - spawner.count);
 
-        commands.spawn((
-            Ant {
-                direction: random_angle,
-            },
-            Sprite {
-                color: Color::srgb(0.1, 0.1, 0.1),
-                custom_size: Some(Vec2::new(2.0, 2.0)),
-                ..default()
-            },
-            Transform::from_xyz(
-                nest_transform.translation.x,
-                nest_transform.translation.y,
-                1.0,
-            ),
-        ));
+        for _ in 0..batch_size {
+            let random_angle = rand::random::<f32>() * 2.0 * PI;
 
-        spawner.count += 1;
+            commands.spawn((
+                Ant {
+                    direction: random_angle,
+                },
+                Sprite {
+                    color: Color::srgb(0.1, 0.1, 0.1),
+                    custom_size: Some(Vec2::new(2.0, 2.0)),
+                    ..default()
+                },
+                Transform::from_xyz(
+                    nest_transform.translation.x,
+                    nest_transform.translation.y,
+                    1.0,
+                ),
+            ));
+
+            spawner.count += 1;
+        }
     }
 }
 
