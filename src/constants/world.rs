@@ -18,4 +18,4 @@ pub const WALL_BOUNCE_MIN_ANGLE: f32 = 30.0;
 pub const WALL_THICKNESS: f32 = 2.0;
 
 pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
-pub const FOOD_DEPLETION_RATE: f32 = 0.05;
+pub const FOOD_DEPLETION_RATE: f32 = 0.005;
