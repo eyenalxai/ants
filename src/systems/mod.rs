@@ -1,6 +1,7 @@
 mod collision;
 mod food_management;
 mod movement;
+mod pause;
 mod pheromone_decay;
 mod pheromone_toggle;
 mod pheromone_visuals;
@@ -14,6 +15,7 @@ pub use food_management::{
     update_food_depletion, update_food_visuals,
 };
 pub use movement::move_ants;
+pub use pause::{setup_pause_button, toggle_pause};
 pub use pheromone_decay::decay_pheromones;
 pub use pheromone_toggle::toggle_pheromone_display;
 pub use pheromone_visuals::update_pheromone_visuals;

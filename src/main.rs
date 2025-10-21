@@ -14,12 +14,12 @@ use ant_spawner::AntSpawner;
 use constants::*;
 use fps_counter::{fps_counter_showhide, fps_text_update_system, setup_fps_counter};
 use pheromone::PheromoneGrid;
-use resources::{FoodCells, FoodManagementState, PheromoneDisplayState, SelectedAnt};
+use resources::{FoodCells, FoodManagementState, PauseState, PheromoneDisplayState, SelectedAnt};
 use systems::{
     check_collisions, decay_pheromones, draw_sensor_cone, handle_food_clicks, move_ants, setup,
-    setup_food_button, spawn_ants, toggle_food_management, toggle_pheromone_display,
-    update_ant_lifetime, update_food_cursor, update_food_depletion, update_food_visuals,
-    update_pheromone_visuals,
+    setup_food_button, setup_pause_button, spawn_ants, toggle_food_management, toggle_pause,
+    toggle_pheromone_display, update_ant_lifetime, update_food_cursor, update_food_depletion,
+    update_food_visuals, update_pheromone_visuals,
 };
 
 fn main() {
@@ -46,20 +46,30 @@ fn main() {
             cells: HashMap::new(),
         })
         .insert_resource(FoodManagementState { enabled: false })
-        .add_systems(Startup, (setup, setup_fps_counter, setup_food_button))
+        .insert_resource(PauseState { paused: false })
+        .add_systems(
+            Startup,
+            (
+                setup,
+                setup_fps_counter,
+                setup_pause_button,
+                setup_food_button,
+            ),
+        )
         .add_systems(
             Update,
             (
-                update_ant_lifetime,
-                spawn_ants,
-                move_ants,
-                check_collisions,
-                decay_pheromones,
+                update_ant_lifetime.run_if(|pause: Res<PauseState>| !pause.paused),
+                spawn_ants.run_if(|pause: Res<PauseState>| !pause.paused),
+                move_ants.run_if(|pause: Res<PauseState>| !pause.paused),
+                check_collisions.run_if(|pause: Res<PauseState>| !pause.paused),
+                decay_pheromones.run_if(|pause: Res<PauseState>| !pause.paused),
                 update_pheromone_visuals,
                 fps_text_update_system,
                 fps_counter_showhide,
                 toggle_pheromone_display,
                 draw_sensor_cone,
+                toggle_pause,
                 toggle_food_management,
                 update_food_cursor,
                 handle_food_clicks,

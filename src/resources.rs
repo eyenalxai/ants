@@ -20,3 +20,8 @@ pub struct FoodCells {
 pub struct FoodManagementState {
     pub enabled: bool,
 }
+
+#[derive(Resource)]
+pub struct PauseState {
+    pub paused: bool,
+}

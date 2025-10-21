@@ -23,7 +23,7 @@ pub fn setup_food_button(mut commands: Commands) {
             Button,
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Percent(1.),
+                left: Val::Px(90.),
                 top: Val::Percent(1.),
                 padding: UiRect::all(Val::Px(8.0)),
                 width: Val::Auto,
