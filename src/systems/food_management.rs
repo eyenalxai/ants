@@ -69,9 +69,16 @@ pub fn handle_food_clicks(
     pheromone_grid: Res<PheromoneGrid>,
     mut food_cells: ResMut<FoodCells>,
     food_markers: Query<(Entity, &FoodMarker)>,
+    ui_query: Query<&Interaction>,
 ) {
     if !food_state.enabled {
         return;
+    }
+
+    for interaction in &ui_query {
+        if *interaction != Interaction::None {
+            return;
+        }
     }
 
     let window = windows.iter().next();
