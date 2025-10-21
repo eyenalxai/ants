@@ -7,8 +7,8 @@ use crate::pheromone::PheromoneGrid;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
-const SENSOR_DISTANCE: f32 = 40.0;
-const SENSOR_ANGLE: f32 = PI / 3.0;
+const SENSOR_DISTANCE: f32 = 10.0;
+const SENSOR_ANGLE: f32 = PI / 4.0;
 const NUM_SENSORS: usize = 5;
 const TARGET_LOCK_DISTANCE: f32 = 40.0;
 
