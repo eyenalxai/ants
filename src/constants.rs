@@ -12,4 +12,4 @@ pub const PHEROMONE_DEPOSIT_RATE: f32 = 5.0;
 pub const PHEROMONE_MAX_INTENSITY: f32 = 100.0;
 pub const ANT_TURN_RATE: f32 = 9.0;
 pub const ANT_RANDOM_TURN_CHANCE: f32 = 0.8;
-pub const ANT_LIFETIME: f32 = 60.0;
+pub const ANT_LIFETIME: f32 = 30.0;
