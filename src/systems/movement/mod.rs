@@ -39,7 +39,8 @@ pub fn move_ants(
             apply_steering(&mut ant, &sensor_readings, delta);
         }
 
-        let velocity = Vec2::new(ant.direction.cos(), ant.direction.sin()) * ant.speed;
+        let (sin, cos) = ant.direction.sin_cos();
+        let velocity = Vec2::new(cos, sin) * ant.speed;
         transform.translation.x += velocity.x * delta;
         transform.translation.y += velocity.y * delta;
 

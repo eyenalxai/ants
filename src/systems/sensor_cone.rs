@@ -23,17 +23,14 @@ pub fn draw_sensor_cone(
 
     if let Ok((_entity, ant, transform)) = ant_query.get(selected_entity) {
         let ant_pos = Vec2::new(transform.translation.x, transform.translation.y);
+        let sensor_step = (2.0 * SENSOR_ANGLE) / (NUM_SENSORS - 1) as f32;
 
         for i in 0..NUM_SENSORS {
-            let angle_offset =
-                -SENSOR_ANGLE + (i as f32 / (NUM_SENSORS - 1) as f32) * (2.0 * SENSOR_ANGLE);
+            let angle_offset = -SENSOR_ANGLE + i as f32 * sensor_step;
             let check_angle = ant.direction + angle_offset;
+            let (sin, cos) = check_angle.sin_cos();
 
-            let sensor_pos = ant_pos
-                + Vec2::new(
-                    check_angle.cos() * SENSOR_DISTANCE,
-                    check_angle.sin() * SENSOR_DISTANCE,
-                );
+            let sensor_pos = ant_pos + Vec2::new(cos * SENSOR_DISTANCE, sin * SENSOR_DISTANCE);
 
             commands.spawn((
                 SensorConeMarker,
@@ -53,8 +50,8 @@ pub fn draw_sensor_cone(
                     ..default()
                 },
                 Transform::from_xyz(
-                    ant_pos.x + (check_angle.cos() * SENSOR_DISTANCE / 2.0),
-                    ant_pos.y + (check_angle.sin() * SENSOR_DISTANCE / 2.0),
+                    ant_pos.x + (cos * SENSOR_DISTANCE / 2.0),
+                    ant_pos.y + (sin * SENSOR_DISTANCE / 2.0),
                     1.5,
                 )
                 .with_rotation(Quat::from_rotation_z(check_angle - PI / 2.0)),

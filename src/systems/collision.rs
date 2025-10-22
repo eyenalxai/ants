@@ -41,14 +41,13 @@ fn find_best_direction(ant: &Ant, current_pos: Vec2, pheromone_grid: &PheromoneG
     let mut weighted_x = 0.0;
     let mut weighted_y = 0.0;
 
-    for i in 0..FULL_SCAN_SENSORS {
-        let check_angle = (i as f32 / FULL_SCAN_SENSORS as f32) * 2.0 * PI;
+    let angle_step = (2.0 * PI) / FULL_SCAN_SENSORS as f32;
 
-        let sensor_pos = current_pos
-            + Vec2::new(
-                check_angle.cos() * SENSOR_DISTANCE,
-                check_angle.sin() * SENSOR_DISTANCE,
-            );
+    for i in 0..FULL_SCAN_SENSORS {
+        let check_angle = i as f32 * angle_step;
+        let (sin, cos) = check_angle.sin_cos();
+
+        let sensor_pos = current_pos + Vec2::new(cos * SENSOR_DISTANCE, sin * SENSOR_DISTANCE);
 
         if let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(sensor_pos)
             && let Some(pheromone) = pheromone_grid.get(grid_x, grid_y)
@@ -59,9 +58,11 @@ fn find_best_direction(ant: &Ant, current_pos: Vec2, pheromone_grid: &PheromoneG
                 pheromone.to_food
             };
 
-            total_intensity += intensity;
-            weighted_x += check_angle.cos() * intensity;
-            weighted_y += check_angle.sin() * intensity;
+            if intensity > 0.01 {
+                total_intensity += intensity;
+                weighted_x += cos * intensity;
+                weighted_y += sin * intensity;
+            }
         }
     }
 

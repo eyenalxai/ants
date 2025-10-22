@@ -54,11 +54,22 @@ impl PheromoneGrid {
 
     pub fn apply_decay(&mut self, decay_rate: f32, delta_time: f32) {
         let decay_factor = decay_rate.powf(delta_time * 60.0);
+        const THRESHOLD: f32 = 0.01;
 
         for row in &mut self.cells {
             for pheromone in row {
-                pheromone.to_food *= decay_factor;
-                pheromone.to_nest *= decay_factor;
+                if pheromone.to_food > THRESHOLD {
+                    pheromone.to_food *= decay_factor;
+                    if pheromone.to_food < THRESHOLD {
+                        pheromone.to_food = 0.0;
+                    }
+                }
+                if pheromone.to_nest > THRESHOLD {
+                    pheromone.to_nest *= decay_factor;
+                    if pheromone.to_nest < THRESHOLD {
+                        pheromone.to_nest = 0.0;
+                    }
+                }
             }
         }
     }
