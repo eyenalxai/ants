@@ -173,34 +173,45 @@ pub fn update_food_cursor(
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     pheromone_grid: Res<PheromoneGrid>,
-    existing_cursors: Query<Entity, With<FoodCursorMarker>>,
+    mut cursor_query: Query<(&mut Transform, &mut Visibility), With<FoodCursorMarker>>,
     ui_query: Query<&Interaction>,
 ) {
-    for entity in &existing_cursors {
-        commands.entity(entity).despawn();
-    }
-
     if !food_state.enabled {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
     for interaction in &ui_query {
         if *interaction != Interaction::None {
+            for (_, mut vis) in &mut cursor_query {
+                *vis = Visibility::Hidden;
+            }
             return;
         }
     }
 
     let window = windows.iter().next();
     let Some(window) = window else {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     };
 
     let Some(cursor_pos) = window.cursor_position() else {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     };
 
     let camera_data = camera_query.iter().next();
     let Some((camera, camera_transform)) = camera_data else {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     };
 
@@ -208,10 +219,16 @@ pub fn update_food_cursor(
         .viewport_to_world_2d(camera_transform, cursor_pos)
         .ok();
     let Some(world_pos) = world_pos else {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     };
 
     let Some((grid_x, grid_y)) = pheromone_grid.world_to_grid(world_pos) else {
+        for (_, mut vis) in &mut cursor_query {
+            *vis = Visibility::Hidden;
+        }
         return;
     };
 
@@ -219,15 +236,21 @@ pub fn update_food_cursor(
     let center_x = (grid_x as f32 + 1.5) * GRID_SIZE - PLAY_AREA_WIDTH / 2.0;
     let center_y = (grid_y as f32 + 1.5) * GRID_SIZE - PLAY_AREA_HEIGHT / 2.0;
 
-    commands.spawn((
-        FoodCursorMarker,
-        Sprite {
-            color: Color::srgba(0.2, 0.8, 0.2, 0.5),
-            custom_size: Some(Vec2::new(size, size)),
-            ..default()
-        },
-        Transform::from_xyz(center_x, center_y, 0.6),
-    ));
+    if let Ok((mut t, mut vis)) = cursor_query.single_mut() {
+        t.translation.x = center_x;
+        t.translation.y = center_y;
+        *vis = Visibility::Visible;
+    } else {
+        commands.spawn((
+            FoodCursorMarker,
+            Sprite {
+                color: Color::srgba(0.2, 0.8, 0.2, 0.5),
+                custom_size: Some(Vec2::new(size, size)),
+                ..default()
+            },
+            Transform::from_xyz(center_x, center_y, 0.6),
+        ));
+    }
 }
 
 pub fn update_food_depletion(
