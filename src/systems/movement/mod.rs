@@ -1,4 +1,3 @@
-mod pheromone_deposit;
 mod sensors;
 mod steering;
 mod wall_collision;
