@@ -119,45 +119,34 @@ pub fn update_nest_cursor(
     nest_state: Res<NestManagementState>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
-    mut cursor_query: Query<(&mut Transform, &mut Sprite, &mut Visibility), With<NestCursorMarker>>,
+    existing_cursors: Query<Entity, With<NestCursorMarker>>,
     ui_query: Query<&Interaction>,
 ) {
+    for entity in &existing_cursors {
+        commands.entity(entity).despawn();
+    }
+
     if !nest_state.enabled {
-        for (_, _, mut vis) in &mut cursor_query {
-            *vis = Visibility::Hidden;
-        }
         return;
     }
 
     for interaction in &ui_query {
         if *interaction != Interaction::None {
-            for (_, _, mut vis) in &mut cursor_query {
-                *vis = Visibility::Hidden;
-            }
             return;
         }
     }
 
     let window = windows.iter().next();
     let Some(window) = window else {
-        for (_, _, mut vis) in &mut cursor_query {
-            *vis = Visibility::Hidden;
-        }
         return;
     };
 
     let Some(cursor_pos) = window.cursor_position() else {
-        for (_, _, mut vis) in &mut cursor_query {
-            *vis = Visibility::Hidden;
-        }
         return;
     };
 
     let camera_data = camera_query.iter().next();
     let Some((camera, camera_transform)) = camera_data else {
-        for (_, _, mut vis) in &mut cursor_query {
-            *vis = Visibility::Hidden;
-        }
         return;
     };
 
@@ -165,9 +154,6 @@ pub fn update_nest_cursor(
         .viewport_to_world_2d(camera_transform, cursor_pos)
         .ok();
     let Some(world_pos) = world_pos else {
-        for (_, _, mut vis) in &mut cursor_query {
-            *vis = Visibility::Hidden;
-        }
         return;
     };
 
@@ -177,20 +163,13 @@ pub fn update_nest_cursor(
         Color::srgba(1.0, 0.0, 0.0, 0.4)
     };
 
-    if let Ok((mut t, mut sprite, mut vis)) = cursor_query.single_mut() {
-        t.translation.x = world_pos.x;
-        t.translation.y = world_pos.y;
-        sprite.color = cursor_color;
-        *vis = Visibility::Visible;
-    } else {
-        commands.spawn((
-            NestCursorMarker,
-            Sprite {
-                color: cursor_color,
-                custom_size: Some(Vec2::new(20.0, 20.0)),
-                ..default()
-            },
-            Transform::from_xyz(world_pos.x, world_pos.y, 0.6),
-        ));
-    }
+    commands.spawn((
+        NestCursorMarker,
+        Sprite {
+            color: cursor_color,
+            custom_size: Some(Vec2::new(20.0, 20.0)),
+            ..default()
+        },
+        Transform::from_xyz(world_pos.x, world_pos.y, 0.6),
+    ));
 }
