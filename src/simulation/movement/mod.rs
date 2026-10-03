@@ -21,14 +21,14 @@ use crate::core::grid::{grid_to_world, world_to_grid};
 use crate::pheromone::grid::PheromoneGrid;
 use crate::simulation::ant::{Ant, AntPhase, AntRng};
 use crate::simulation::density::{AntDensity, crowd_response};
-use crate::simulation::environment::SimClock;
+use crate::simulation::environment::{Obstacles, SimClock};
 use crate::simulation::food::FoodGrid;
 use sensors::read_sensors;
 use steering::{
     accumulate_pi_drift, apply_sensor_noise, apply_steering, remember_food, steer_homeward,
     steer_nursing, steer_towards_food, steer_towards_route_memory, trail_strength,
 };
-use wall::handle_wall_collision;
+use wall::{handle_obstacle_collision, handle_wall_collision};
 
 /// The dot-product cone test in [`in_cone`] is exact only for a `PI/2`
 /// half-angle, where `cos(half_angle) == 0`.
@@ -39,13 +39,15 @@ struct StepContext<'a> {
     pheromone_grid: &'a PheromoneGrid,
     food_grid: &'a FoodGrid,
     density: &'a AntDensity,
+    /// Static terrain, shared read-only with every parallel ant step.
+    obstacles: &'a Obstacles,
     /// Foraging-activity multiplier from [`SimClock`], in `[0, 1]`.
     activity: f32,
     delta: f32,
 }
 
 /// Advance every ant: sense, steer, avoid crowding, move, then separate from
-/// physical contacts and bounce off walls.
+/// physical contacts and bounce off walls and obstacles.
 ///
 /// Pheromone deposit is a separate serial pass in
 /// [`crate::simulation::deposit`]. Every ant must carry an [`AntRng`]; the
@@ -61,6 +63,7 @@ pub fn move_ants(
     pheromone_grid: Res<PheromoneGrid>,
     food_grid: Res<FoodGrid>,
     clock: Res<SimClock>,
+    obstacles: Res<Obstacles>,
 ) {
     let delta = time.delta_secs();
     let activity = clock.activity.clamp(0.0, 1.0);
@@ -71,6 +74,7 @@ pub fn move_ants(
             pheromone_grid: &pheromone_grid,
             food_grid: &food_grid,
             density: &density,
+            obstacles: &obstacles,
             activity,
             delta,
         };
@@ -96,7 +100,14 @@ pub fn move_ants(
     ant_query
         .par_iter_mut()
         .for_each(|(entity, mut ant, mut transform, _)| {
-            apply_contact(entity.index_u32(), &mut ant, &mut transform, contact, delta);
+            apply_contact(
+                entity.index_u32(),
+                &mut ant,
+                &mut transform,
+                contact,
+                &obstacles,
+                delta,
+            );
         });
 }
 
@@ -141,22 +152,27 @@ fn step_ant(
             if ant.is_laden() {
                 target_speed *= load_speed_factor(ant);
             }
-            let mut readings = read_sensors(ant, current_pos, context.pheromone_grid);
+            let mut readings =
+                read_sensors(ant, current_pos, context.pheromone_grid, context.obstacles);
             apply_sensor_noise(&mut readings, ant, rng);
             steer_homeward(ant, current_pos, &readings, delta, rng);
         }
         AntPhase::Foraging if ant.is_laden() => {
             target_speed *= load_speed_factor(ant);
-            let mut readings = read_sensors(ant, current_pos, context.pheromone_grid);
+            let mut readings =
+                read_sensors(ant, current_pos, context.pheromone_grid, context.obstacles);
             apply_sensor_noise(&mut readings, ant, rng);
             steer_homeward(ant, current_pos, &readings, delta, rng);
         }
         AntPhase::Foraging => {
-            if let Some(food_pos) = sense_food(ant, current_pos, context.food_grid) {
+            if let Some(food_pos) =
+                sense_food(ant, current_pos, context.food_grid, context.obstacles)
+            {
                 remember_food(ant, food_pos);
                 steer_towards_food(ant, food_pos, current_pos, delta, rng);
             } else {
-                let mut readings = read_sensors(ant, current_pos, context.pheromone_grid);
+                let mut readings =
+                    read_sensors(ant, current_pos, context.pheromone_grid, context.obstacles);
                 apply_sensor_noise(&mut readings, ant, rng);
 
                 let weak_trail = trail_strength(&readings) < ROUTE_MEMORY_TRAIL_MAX;
@@ -194,17 +210,23 @@ fn step_ant(
     transform.translation.x += cos * target_speed * delta;
     transform.translation.y += sin * target_speed * delta;
 
+    // Terrain first, then the play-area clamp, so the ant always ends inside
+    // the arena even when an obstacle sits near a wall.
+    handle_obstacle_collision(ant, transform, context.obstacles);
     handle_wall_collision(ant, transform);
 }
 
 /// Phase-2 contact separation: push out of an overlapping neighbour and turn
 /// away (keep-right on head-on encounters). Positions here are post-move, so
-/// the split overlap correction restores the contact distance exactly.
+/// the split overlap correction restores the contact distance exactly. A
+/// correction that lands the ant in terrain is resolved against the obstacles
+/// and then the walls.
 fn apply_contact(
     entity_index: u32,
     ant: &mut Ant,
     transform: &mut Transform,
     density: &AntDensity,
+    obstacles: &Obstacles,
     delta: f32,
 ) {
     let pos = Vec2::new(transform.translation.x, transform.translation.y);
@@ -219,6 +241,7 @@ fn apply_contact(
     transform.translation.x += correction.x;
     transform.translation.y += correction.y;
 
+    handle_obstacle_collision(ant, transform, obstacles);
     handle_wall_collision(ant, transform);
 }
 
@@ -253,22 +276,28 @@ fn sample_crowding(ant: &Ant, pos: Vec2, density: &AntDensity) -> (f32, f32) {
 /// global fallback scan. The nearest in-cone cell is selected directly, which
 /// is equivalent to the old "nearest overall, then nearest in-cone" two-step
 /// because a cell that is nearest overall and in cone is also nearest among
-/// the in-cone cells.
-fn sense_food(ant: &Ant, ant_pos: Vec2, food_grid: &FoodGrid) -> Option<Vec2> {
+/// the in-cone cells. A cell whose segment from the ant crosses an obstacle is
+/// not sensed (F16).
+fn sense_food(
+    ant: &Ant,
+    ant_pos: Vec2,
+    food_grid: &FoodGrid,
+    obstacles: &Obstacles,
+) -> Option<Vec2> {
     let center = world_to_grid(ant_pos)?;
     // +1 cell covers the ant's offset from its cell centre.
     let radius_cells = (FOOD_SENSE_RANGE / GRID_SIZE).ceil() as i32 + 1;
     let (sin, cos) = ant.direction.sin_cos();
     let direction = Vec2::new(cos, sin);
     let (cell, _) = food_grid.nearest_within_matching(center, radius_cells, |cell| {
-        in_cone(ant_pos, direction, cell, food_grid).is_some()
+        in_cone(ant_pos, direction, cell, food_grid, obstacles).is_some()
     })?;
 
-    in_cone(ant_pos, direction, cell, food_grid).map(|(food_pos, _)| food_pos)
+    in_cone(ant_pos, direction, cell, food_grid, obstacles).map(|(food_pos, _)| food_pos)
 }
 
-/// Filter one candidate cell through the pickup amount, range and forward
-/// cone; returns its position and distance when it passes.
+/// Filter one candidate cell through the pickup amount, range, forward cone
+/// and obstacle occlusion; returns its position and distance when it passes.
 ///
 /// The cone test is the dot-product form of `|angle| <= PI/2` (exact for the
 /// current half-angle): `direction` is computed once per query, so no `atan2`
@@ -278,6 +307,7 @@ fn in_cone(
     direction: Vec2,
     cell: UVec2,
     food_grid: &FoodGrid,
+    obstacles: &Obstacles,
 ) -> Option<(Vec2, f32)> {
     if !food_grid.amount(cell).is_some_and(|amount| amount > 0.0) {
         return None;
@@ -292,6 +322,10 @@ fn in_cone(
     }
 
     if offset.dot(direction) < 0.0 {
+        return None;
+    }
+
+    if obstacles.blocks_segment(ant_pos, food_pos) {
         return None;
     }
 
@@ -318,6 +352,7 @@ mod tests {
     use crate::constants::ant::{ANT_SPEED, CARRY_SPEED_FACTOR, CONTACT_RADIUS};
     use crate::constants::world::INITIAL_FOOD_AMOUNT;
     use crate::simulation::density::rebuild_ant_density;
+    use crate::simulation::environment::Obstacle;
     use bevy::time::TimeUpdateStrategy;
     use std::f32::consts::PI;
     use std::time::Duration;
@@ -347,6 +382,7 @@ mod tests {
             .init_resource::<FoodGrid>()
             .init_resource::<AntDensity>()
             .init_resource::<SimClock>()
+            .insert_resource(Obstacles::empty())
             .add_systems(FixedUpdate, (rebuild_ant_density, move_ants).chain());
         app
     }
@@ -384,11 +420,11 @@ mod tests {
         let ant = Ant::test_ant(0.0);
         let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
         let grid = food_grid_with([ahead]);
-        assert!(sense_food(&ant, Vec2::ZERO, &grid).is_some());
+        assert!(sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()).is_some());
 
         let behind = world_to_grid(Vec2::new(-6.0, 0.0)).expect("in bounds");
         let grid = food_grid_with([behind]);
-        assert!(sense_food(&ant, Vec2::ZERO, &grid).is_none());
+        assert!(sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()).is_none());
     }
 
     #[test]
@@ -396,7 +432,7 @@ mod tests {
         let ant = Ant::test_ant(0.0);
         let far = world_to_grid(Vec2::new(FOOD_SENSE_RANGE + GRID_SIZE, 0.0)).expect("in bounds");
         let grid = food_grid_with([far]);
-        assert!(sense_food(&ant, Vec2::ZERO, &grid).is_none());
+        assert!(sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()).is_none());
     }
 
     #[test]
@@ -407,7 +443,7 @@ mod tests {
         let grid = food_grid_with([behind, ahead]);
 
         assert_eq!(
-            sense_food(&ant, Vec2::ZERO, &grid),
+            sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()),
             Some(grid_to_world(ahead)),
             "the nearer cell is outside the cone, so the in-cone cell must win"
         );
@@ -421,7 +457,7 @@ mod tests {
         let grid = food_grid_with([far, near]);
 
         assert_eq!(
-            sense_food(&ant, Vec2::ZERO, &grid),
+            sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()),
             Some(grid_to_world(near))
         );
     }
@@ -561,7 +597,7 @@ mod tests {
                     let pos = ant_pos(&app, entity);
                     let food_grid = app.world().resource::<FoodGrid>();
 
-                    if sense_food(ant, pos, food_grid).is_some() {
+                    if sense_food(ant, pos, food_grid, &Obstacles::empty()).is_some() {
                         senses[slot] = Some(tick);
                     }
                 }
@@ -604,5 +640,91 @@ mod tests {
             distance >= CONTACT_RADIUS * 0.9,
             "contact separation must push overlapping ants apart, distance {distance}"
         );
+    }
+
+    /// F16: a wall between the ant and a food cell hides it, while an obstacle
+    /// to the side leaves the sight line open.
+    #[test]
+    fn obstacles_block_food_sensing() {
+        let ant = Ant::test_ant(0.0);
+        let ahead = world_to_grid(Vec2::new(12.0, 0.0)).expect("in bounds");
+        let grid = food_grid_with([ahead]);
+
+        assert!(sense_food(&ant, Vec2::ZERO, &grid, &Obstacles::empty()).is_some());
+
+        let wall = Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(6.0, 0.0),
+            Vec2::new(1.0, 4.0),
+        )]);
+        assert_eq!(
+            sense_food(&ant, Vec2::ZERO, &grid, &wall),
+            None,
+            "food behind a wall must not be sensed"
+        );
+
+        let side = Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(6.0, 8.0),
+            Vec2::new(1.0, 4.0),
+        )]);
+        assert!(
+            sense_food(&ant, Vec2::ZERO, &grid, &side).is_some(),
+            "an obstacle beside the sight line must not block it"
+        );
+    }
+
+    /// The move pass resolves an overlap after moving: the ant is pushed clear
+    /// of the surface and its heading points away from it.
+    #[test]
+    fn ants_are_pushed_out_of_obstacles_by_the_move_pass() {
+        let mut app = movement_app();
+        let wall = Obstacle::aabb(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+        app.insert_resource(Obstacles::new(vec![wall]));
+
+        let ant = Ant::test_ant(0.0);
+        let entity = spawn_ant(&mut app, ant, 0, Vec2::new(9.0, 0.0));
+
+        run_one_step(&mut app);
+
+        let pos = ant_pos(&app, entity);
+        assert!(
+            pos.x >= 10.0,
+            "the ant must be pushed out of the box, got {pos}"
+        );
+        assert_eq!(
+            wall.penetration(pos, crate::constants::environment::OBSTACLE_ANT_RADIUS),
+            None,
+            "the ant must end clear of the obstacle, got {pos}"
+        );
+
+        let ant = app.world().get::<Ant>(entity).expect("ant");
+        let heading = Vec2::new(ant.direction.cos(), ant.direction.sin());
+        assert!(
+            heading.x > 0.0,
+            "the heading must point away from the +x face, got {heading}"
+        );
+    }
+
+    /// At 64 Hz an ant moves 0.78 u per tick, far less than its body radius,
+    /// so a wall of normal thickness cannot be tunnelled through.
+    #[test]
+    fn ants_cannot_tunnel_through_a_thin_obstacle() {
+        let mut app = movement_app();
+        app.insert_resource(Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(10.0, 0.0),
+            Vec2::new(1.0, 50.0),
+        )]));
+
+        let ant = Ant::test_ant(0.0);
+        let entity = spawn_ant(&mut app, ant, 0, Vec2::new(-20.0, 0.0));
+
+        for tick in 0..64 {
+            app.update();
+
+            let pos = ant_pos(&app, entity);
+            assert!(
+                pos.x <= 9.0 + 1e-3,
+                "the ant tunneled through the wall at tick {tick}: {pos}"
+            );
+        }
     }
 }

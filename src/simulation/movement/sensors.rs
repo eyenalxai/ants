@@ -3,12 +3,13 @@
 use bevy::prelude::*;
 
 use crate::constants::sensor::{
-    NUM_SENSORS, SENSOR_ANGLE, SENSOR_HALF_SATURATION, SENSOR_RING_ATTENUATION,
+    NUM_SENSORS, SENSOR_ANGLE, SENSOR_DISTANCE, SENSOR_HALF_SATURATION, SENSOR_RING_ATTENUATION,
     SENSOR_RING_DISTANCES, SENSOR_SIGNAL_THRESHOLD,
 };
 use crate::core::grid::world_to_grid;
 use crate::pheromone::grid::{PheromoneGrid, PheromoneKind};
 use crate::simulation::ant::Ant;
+use crate::simulation::environment::Obstacles;
 
 /// Angle of ray `index` relative to the ant's heading, spanning
 /// `-SENSOR_ANGLE..=SENSOR_ANGLE`.
@@ -30,10 +31,17 @@ pub fn normalized_intensity(raw: f32) -> f32 {
 /// Sample the strongest attenuated signal along each sensor ray (no
 /// allocation). Laden and low-energy ants read the `ToNest` channel, everyone
 /// else reads `ToFood`.
+///
+/// Obstacles occlude the rays: a sample is skipped when the segment from the
+/// ant to it crosses an obstacle, so a trail behind a wall cannot be followed.
+/// The exact segment tests only run for ants whose sensor fan actually reaches
+/// an obstacle ([`Obstacles::any_within`]); with an empty obstacle set the
+/// function is byte-for-byte the old fast path.
 pub fn read_sensors(
     ant: &Ant,
     current_pos: Vec2,
     pheromone_grid: &PheromoneGrid,
+    obstacles: &Obstacles,
 ) -> [f32; NUM_SENSORS] {
     let mut readings = [0.0; NUM_SENSORS];
     let kind = if ant.follows_to_nest() {
@@ -41,6 +49,8 @@ pub fn read_sensors(
     } else {
         PheromoneKind::ToFood
     };
+    let may_be_occluded =
+        !obstacles.is_empty() && obstacles.any_within(current_pos, SENSOR_DISTANCE);
 
     for (index, reading) in readings.iter_mut().enumerate() {
         let check_angle = ant.direction + sensor_offset(index);
@@ -50,6 +60,10 @@ pub fn read_sensors(
         let mut strongest: f32 = 0.0;
         for &ring in &SENSOR_RING_DISTANCES {
             let sensor_pos = current_pos + ray * ring;
+
+            if may_be_occluded && obstacles.blocks_segment(current_pos, sensor_pos) {
+                continue;
+            }
 
             if let Some(cell) = world_to_grid(sensor_pos) {
                 let attenuated = normalized_intensity(pheromone_grid.sample(cell, kind))
@@ -71,7 +85,7 @@ pub fn read_sensors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::sensor::SENSOR_DISTANCE;
+    use crate::simulation::environment::Obstacle;
 
     const EPS: f32 = 1e-4;
 
@@ -144,7 +158,7 @@ mod tests {
         let inner = world_to_grid(Vec2::new(SENSOR_RING_DISTANCES[0], 0.0)).expect("in bounds");
         grid.add(inner, SINGLE_PASS_RAW, 0.0);
 
-        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid));
+        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty()));
         assert!(
             reading >= SENSOR_SIGNAL_THRESHOLD,
             "a fresh pass must read at least {SENSOR_SIGNAL_THRESHOLD} at {} u, got {reading}",
@@ -155,7 +169,10 @@ mod tests {
         let mut far = PheromoneGrid::new();
         let outer = world_to_grid(Vec2::new(SENSOR_DISTANCE, 0.0)).expect("in bounds");
         far.add(outer, SINGLE_PASS_RAW, 0.0);
-        assert_eq!(strongest(&read_sensors(&ant, Vec2::ZERO, &far)), 0.0);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &far, &Obstacles::empty())),
+            0.0
+        );
     }
 
     /// F9: an established (5-pass) trail is strongly detected, including at
@@ -171,7 +188,7 @@ mod tests {
             }
         }
 
-        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid));
+        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty()));
         assert!(
             reading > 4.0 * SENSOR_SIGNAL_THRESHOLD,
             "a 5-pass trail must steer strongly, got {reading}"
@@ -188,7 +205,7 @@ mod tests {
         let outer = world_to_grid(Vec2::new(SENSOR_DISTANCE, 0.0)).expect("in bounds");
         grid.add(outer, BUSY_TRAIL_RAW, 0.0);
 
-        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid));
+        let reading = strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty()));
         assert!(
             reading > 0.1,
             "a busy trail must be sensed at the outer ring, got {reading}"
@@ -203,14 +220,14 @@ mod tests {
         let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
         grid.add(ahead, BUSY_TRAIL_RAW, 0.0);
 
-        let readings = read_sensors(&ant, Vec2::ZERO, &grid);
+        let readings = read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty());
         assert!(strongest(&readings) > 0.0);
 
         grid.clear();
         let behind = world_to_grid(Vec2::new(-6.0, 0.0)).expect("in bounds");
         grid.add(behind, BUSY_TRAIL_RAW, 0.0);
 
-        let readings = read_sensors(&ant, Vec2::ZERO, &grid);
+        let readings = read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty());
         assert_eq!(strongest(&readings), 0.0);
     }
 
@@ -225,10 +242,135 @@ mod tests {
         let mut grid = PheromoneGrid::new();
         let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
         grid.add(ahead, BUSY_TRAIL_RAW, 0.0);
-        assert_eq!(strongest(&read_sensors(&ant, Vec2::ZERO, &grid)), 0.0);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty())),
+            0.0
+        );
 
         grid.clear();
         grid.add(ahead, 0.0, BUSY_TRAIL_RAW);
-        assert!(strongest(&read_sensors(&ant, Vec2::ZERO, &grid)) > 0.0);
+        assert!(strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty())) > 0.0);
+    }
+
+    /// F16: a wall between the ant and the trail hides it, for both obstacle
+    /// shapes, while an obstacle behind the ant leaves the reading untouched.
+    #[test]
+    fn obstacles_occlude_trails_they_stand_in_front_of() {
+        let ant = Ant::test_ant(0.0);
+        let mut grid = PheromoneGrid::new();
+        let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
+        grid.add(ahead, BUSY_TRAIL_RAW, 0.0);
+
+        let unoccluded = strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty()));
+        assert!(unoccluded > 0.0);
+
+        let wall = Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(3.0, 0.0),
+            Vec2::new(0.5, 2.0),
+        )]);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &wall)),
+            0.0,
+            "an AABB between ant and trail must occlude it"
+        );
+
+        let boulder = Obstacles::new(vec![Obstacle::circle(Vec2::new(3.0, 0.0), 3.0)]);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &boulder)),
+            0.0,
+            "a circle covering every ray that samples the trail must occlude it"
+        );
+
+        let behind = Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(-3.0, 0.0),
+            Vec2::new(0.5, 2.0),
+        )]);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &behind)),
+            unoccluded,
+            "an obstacle behind the ant must not occlude the forward ray"
+        );
+    }
+
+    /// Occlusion is per ray: an obstacle that only covers the outer rays leaves
+    /// the center ray reading intact.
+    #[test]
+    fn occlusion_only_affects_rays_that_cross_the_obstacle() {
+        let ant = Ant::test_ant(0.0);
+        let mut grid = PheromoneGrid::new();
+        let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
+        grid.add(ahead, BUSY_TRAIL_RAW, 0.0);
+
+        let unoccluded = strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &Obstacles::empty()));
+
+        // Sits over the +60 degree ray (3.0, 5.2) but not over the center ray.
+        let side = Obstacles::new(vec![Obstacle::aabb(
+            Vec2::new(3.0, 6.0),
+            Vec2::new(1.0, 1.0),
+        )]);
+        assert_eq!(
+            strongest(&read_sensors(&ant, Vec2::ZERO, &grid, &side)),
+            unoccluded,
+            "the center ray must still read the trail"
+        );
+    }
+
+    /// Ignored micro-benchmark of the occlusion overhead at 30k ants: one
+    /// `read_sensors` per ant and tick with and without the default obstacle
+    /// set. Run with:
+    /// `cargo test --release --locked --bin ants sensor_occlusion_micro_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "perf micro-benchmark, run on demand"]
+    fn sensor_occlusion_micro_bench_30k() {
+        use crate::simulation::environment::Obstacle;
+        use std::time::Instant;
+
+        const ANTS: usize = 30_000;
+        const TICKS: u32 = 100;
+
+        let obstacles = Obstacles::new(vec![
+            Obstacle::circle(Vec2::new(-120.0, 170.0), 34.0),
+            Obstacle::aabb(Vec2::new(40.0, -180.0), Vec2::new(70.0, 12.0)),
+            Obstacle::aabb(Vec2::new(240.0, 200.0), Vec2::new(14.0, 70.0)),
+        ]);
+        let empty = Obstacles::empty();
+        let grid = PheromoneGrid::new();
+
+        let mut rng = fastrand::Rng::with_seed(0x5E_50_12);
+        let ants: Vec<(Ant, Vec2)> = (0..ANTS)
+            .map(|_| {
+                let ant = Ant::test_ant(rng.f32() * std::f32::consts::TAU);
+                let pos = Vec2::new(rng.f32() * 760.0 - 380.0, rng.f32() * 560.0 - 280.0);
+                (ant, pos)
+            })
+            .collect();
+
+        let bench = |obstacles: &Obstacles| {
+            for _ in 0..5 {
+                for (ant, pos) in &ants {
+                    std::hint::black_box(read_sensors(ant, *pos, &grid, obstacles));
+                }
+            }
+
+            let start = Instant::now();
+
+            for _ in 0..TICKS {
+                for (ant, pos) in &ants {
+                    std::hint::black_box(read_sensors(ant, *pos, &grid, obstacles));
+                }
+            }
+
+            start.elapsed().as_secs_f64() * 1000.0 / f64::from(TICKS)
+        };
+
+        let empty_ms = bench(&empty);
+        let obstacle_ms = bench(&obstacles);
+
+        println!(
+            "sensor occlusion micro-bench: {ANTS} ants, {TICKS} ticks, \
+             empty {empty_ms:.3} ms/tick, {} obstacles {obstacle_ms:.3} ms/tick (+{:.3} ms/tick)",
+            obstacles.len(),
+            obstacle_ms - empty_ms
+        );
     }
 }

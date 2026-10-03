@@ -1,9 +1,11 @@
-//! Play-area wall collision and bounce response.
+//! Play-area wall collision and obstacle bounce response.
 
 use bevy::prelude::*;
 
+use crate::constants::environment::{OBSTACLE_ANT_RADIUS, OBSTACLE_MIN_SEPARATION};
 use crate::constants::world::{PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH, WALL_BOUNCE_MIN_ANGLE};
 use crate::simulation::ant::Ant;
+use crate::simulation::environment::Obstacles;
 
 /// The four play-area walls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,14 +28,15 @@ impl WallSide {
     }
 }
 
-/// Reflect `incoming` off `wall` and keep the outgoing heading at least
-/// [`WALL_BOUNCE_MIN_ANGLE`] away from the wall plane (no wall-hugging).
+/// Reflect `incoming` off a surface whose outward unit `normal` points into
+/// free space, keeping the outgoing heading at least [`WALL_BOUNCE_MIN_ANGLE`]
+/// away from the surface plane (no surface-hugging).
 ///
-/// The sign of the velocity component parallel to the wall is preserved; the
-/// normal component always ends up pointing back into the play area.
-pub fn bounce_direction(incoming: f32, wall: WallSide) -> f32 {
+/// The sign of the velocity component parallel to the surface is preserved;
+/// the normal component always ends up positive. This is the general form of
+/// the wall bounce and is reused for arbitrary obstacle normals.
+pub fn reflect_direction(incoming: f32, normal: Vec2) -> f32 {
     let velocity = Vec2::new(incoming.cos(), incoming.sin());
-    let normal = wall.inward_normal();
     let reflected = velocity - 2.0 * velocity.dot(normal) * normal;
 
     let min_inward = WALL_BOUNCE_MIN_ANGLE.to_radians().sin();
@@ -49,6 +52,15 @@ pub fn bounce_direction(incoming: f32, wall: WallSide) -> f32 {
 
     let outgoing = normal * inward + tangent * tangent_component;
     outgoing.y.atan2(outgoing.x)
+}
+
+/// Reflect `incoming` off `wall` and keep the outgoing heading at least
+/// [`WALL_BOUNCE_MIN_ANGLE`] away from the wall plane (no wall-hugging).
+///
+/// The sign of the velocity component parallel to the wall is preserved; the
+/// normal component always ends up pointing back into the play area.
+pub fn bounce_direction(incoming: f32, wall: WallSide) -> f32 {
+    reflect_direction(incoming, wall.inward_normal())
 }
 
 /// Clamp the ant to the play area and bounce its heading off any wall crossed.
@@ -73,9 +85,51 @@ pub fn handle_wall_collision(ant: &mut Ant, transform: &mut Transform) {
     }
 }
 
+/// Push the ant out of any obstacle it overlaps and reflect its heading.
+///
+/// Runs after the movement step (before [`handle_wall_collision`], so the
+/// play-area clamp always has the last word) and again after the contact
+/// separation correction. The push is the shortest separation along the
+/// obstacle normal plus [`OBSTACLE_MIN_SEPARATION`], which keeps the ant just
+/// clear of the surface; a maximum move of
+/// [`crate::constants::ant::ANT_SPEED`] × `dt` (0.78 u at 64 Hz) is far smaller
+/// than the ant radius, so an ant cannot tunnel through an obstacle that is at
+/// least [`crate::constants::ant::ANT_SIZE`] thick.
+///
+/// Cost: with no obstacles this is a single empty-slice check. With `k`
+/// obstacles the pass is `O(k)` per ant (a distance-squared broad-phase check
+/// per obstacle); only ants whose bounding circles actually overlap pay for
+/// the narrow-phase push-out.
+pub fn handle_obstacle_collision(ant: &mut Ant, transform: &mut Transform, obstacles: &Obstacles) {
+    if obstacles.is_empty() {
+        return;
+    }
+
+    let mut pos = Vec2::new(transform.translation.x, transform.translation.y);
+
+    for obstacle in obstacles.iter() {
+        // Broad phase: skip obstacles that cannot touch the ant body.
+        let reach = obstacle.bounding_radius() + OBSTACLE_ANT_RADIUS;
+        if (obstacle.center() - pos).length_squared() > reach * reach {
+            continue;
+        }
+
+        let Some((normal, depth)) = obstacle.penetration(pos, OBSTACLE_ANT_RADIUS) else {
+            continue;
+        };
+
+        let push = depth + OBSTACLE_MIN_SEPARATION;
+        pos += normal * push;
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+        ant.direction = reflect_direction(ant.direction, normal);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulation::environment::Obstacle;
     use std::f32::consts::PI;
 
     const EPS: f32 = 1e-4;
@@ -186,5 +240,175 @@ mod tests {
 
     fn min_inward_epsilon() -> f32 {
         (WALL_BOUNCE_MIN_ANGLE.to_radians().sin() - EPS).max(0.0)
+    }
+
+    #[test]
+    fn reflect_direction_generalizes_the_wall_bounce() {
+        let normals = [
+            Vec2::X,
+            Vec2::NEG_X,
+            Vec2::Y,
+            Vec2::NEG_Y,
+            Vec2::new(1.0, 1.0).normalize(),
+            Vec2::new(-2.0, 1.0).normalize(),
+        ];
+        let min_inward = WALL_BOUNCE_MIN_ANGLE.to_radians().sin();
+
+        for normal in normals {
+            for step in 0..32 {
+                let incoming = -PI + step as f32 * (2.0 * PI / 32.0);
+                let outgoing = reflect_direction(incoming, normal);
+                let velocity = Vec2::new(outgoing.cos(), outgoing.sin());
+
+                assert!(
+                    velocity.dot(normal) >= min_inward - EPS,
+                    "normal {normal}: incoming {incoming} leaves only {}",
+                    velocity.dot(normal)
+                );
+            }
+        }
+
+        // The wall-facing helper is exactly the general form with the wall
+        // normal, so every existing wall contract is preserved.
+        for wall in [
+            WallSide::Left,
+            WallSide::Right,
+            WallSide::Bottom,
+            WallSide::Top,
+        ] {
+            for incoming in incoming_headings(wall) {
+                assert_eq!(
+                    bounce_direction(incoming, wall),
+                    reflect_direction(incoming, wall.inward_normal())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn obstacle_overlap_is_pushed_out_and_reflected() {
+        let obstacles = Obstacles::new(vec![Obstacle::aabb(Vec2::ZERO, Vec2::new(10.0, 10.0))]);
+
+        // Deep inside the box, heading east into the +x face.
+        let mut ant = Ant::test_ant(0.0);
+        let mut transform = Transform::from_xyz(0.0, 0.0, 0.0);
+        handle_obstacle_collision(&mut ant, &mut transform, &obstacles);
+
+        let pos = transform.translation.truncate();
+        assert!(
+            pos.x >= 10.0 + OBSTACLE_ANT_RADIUS,
+            "the ant must leave the box through a face, got {pos}"
+        );
+        assert!(
+            (pos.y).abs() < EPS,
+            "the shallowest face is +x, so y must not move, got {pos}"
+        );
+
+        let heading = Vec2::new(ant.direction.cos(), ant.direction.sin());
+        assert!(
+            heading.x >= WALL_BOUNCE_MIN_ANGLE.to_radians().sin() - EPS,
+            "the heading must point away from the +x face, got {heading}"
+        );
+        assert!(
+            obstacles
+                .iter()
+                .all(|obstacle| obstacle.penetration(pos, OBSTACLE_ANT_RADIUS).is_none()),
+            "the ant must end up clear of every obstacle"
+        );
+    }
+
+    #[test]
+    fn circle_obstacle_push_out_clears_the_surface() {
+        let obstacles = Obstacles::new(vec![Obstacle::circle(Vec2::new(20.0, 0.0), 5.0)]);
+        let mut ant = Ant::test_ant(PI);
+        let mut transform = Transform::from_xyz(18.0, 0.0, 0.0);
+
+        handle_obstacle_collision(&mut ant, &mut transform, &obstacles);
+
+        let pos = transform.translation.truncate();
+        let distance = (pos - Vec2::new(20.0, 0.0)).length();
+        assert!(
+            distance >= 5.0 + OBSTACLE_ANT_RADIUS,
+            "the ant must be pushed to the disc surface, distance {distance}"
+        );
+
+        let heading = Vec2::new(ant.direction.cos(), ant.direction.sin());
+        assert!(
+            heading.dot((pos - Vec2::new(20.0, 0.0)).normalize())
+                >= WALL_BOUNCE_MIN_ANGLE.to_radians().sin() - EPS,
+            "the heading must point away from the disc, got {heading}"
+        );
+    }
+
+    #[test]
+    fn empty_obstacles_leave_the_ant_untouched() {
+        let obstacles = Obstacles::empty();
+        let mut ant = Ant::test_ant(1.25);
+        let mut transform = Transform::from_xyz(3.0, -4.0, 0.0);
+
+        handle_obstacle_collision(&mut ant, &mut transform, &obstacles);
+
+        assert_eq!(transform.translation.truncate(), Vec2::new(3.0, -4.0));
+        assert_eq!(ant.direction, 1.25);
+    }
+
+    /// Ignored micro-benchmark of the obstacle collision pass at 30k ants.
+    /// Calls the pass twice per ant (the real chain resolves obstacles after
+    /// the move and again after contact separation). Run with:
+    /// `cargo test --release --locked --bin ants obstacle_collision_micro_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "perf micro-benchmark, run on demand"]
+    fn obstacle_collision_micro_bench_30k() {
+        use crate::simulation::environment::Obstacle;
+        use std::time::Instant;
+
+        const ANTS: usize = 30_000;
+        const TICKS: u32 = 100;
+
+        let obstacles = Obstacles::new(vec![
+            Obstacle::circle(Vec2::new(-120.0, 170.0), 34.0),
+            Obstacle::aabb(Vec2::new(40.0, -180.0), Vec2::new(70.0, 12.0)),
+            Obstacle::aabb(Vec2::new(240.0, 200.0), Vec2::new(14.0, 70.0)),
+        ]);
+        let empty = Obstacles::empty();
+
+        let mut rng = fastrand::Rng::with_seed(0x0B57_AC1E);
+        let mut ants: Vec<(Ant, Transform)> = (0..ANTS)
+            .map(|_| {
+                let ant = Ant::test_ant(rng.f32() * std::f32::consts::TAU);
+                let pos = Vec2::new(rng.f32() * 760.0 - 380.0, rng.f32() * 560.0 - 280.0);
+                (ant, Transform::from_xyz(pos.x, pos.y, 0.0))
+            })
+            .collect();
+
+        let mut bench = |obstacles: &Obstacles| {
+            for _ in 0..5 {
+                for (ant, transform) in ants.iter_mut() {
+                    handle_obstacle_collision(ant, transform, obstacles);
+                    handle_obstacle_collision(ant, transform, obstacles);
+                }
+            }
+
+            let start = Instant::now();
+
+            for _ in 0..TICKS {
+                for (ant, transform) in ants.iter_mut() {
+                    handle_obstacle_collision(ant, transform, obstacles);
+                    handle_obstacle_collision(ant, transform, obstacles);
+                }
+            }
+
+            start.elapsed().as_secs_f64() * 1000.0 / f64::from(TICKS)
+        };
+
+        let empty_ms = bench(&empty);
+        let obstacle_ms = bench(&obstacles);
+
+        println!(
+            "obstacle collision micro-bench: {ANTS} ants, {TICKS} ticks, 2 passes/tick, \
+             empty {empty_ms:.3} ms/tick, {} obstacles {obstacle_ms:.3} ms/tick (+{:.3} ms/tick)",
+            obstacles.len(),
+            obstacle_ms - empty_ms
+        );
     }
 }

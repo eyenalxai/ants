@@ -1,4 +1,7 @@
-//! Environment tuning constants (day-night cycle, activity and nest geometry).
+//! Environment tuning constants (day-night cycle, activity, nest geometry and
+//! obstacles).
+
+use crate::constants::ant::ANT_SIZE;
 
 /// Length of one full day-night cycle in seconds of simulated time.
 ///
@@ -20,3 +23,10 @@ pub const ACTIVITY_MIN: f32 = 0.3;
 /// [`crate::simulation::nest::NestGeometry::entrance_radius`] once a nest
 /// entity exists; the colony stream reads it to size the dropoff/spawn mouth.
 pub const ENTRANCE_RADIUS: f32 = 6.0;
+
+/// Ant body radius used for obstacle collision, half of [`ANT_SIZE`].
+pub const OBSTACLE_ANT_RADIUS: f32 = ANT_SIZE * 0.5;
+
+/// Extra gap left between the ant body and an obstacle surface after a push-out,
+/// so a resolved contact does not immediately re-collide next tick.
+pub const OBSTACLE_MIN_SEPARATION: f32 = 0.05;
