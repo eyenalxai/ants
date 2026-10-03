@@ -19,7 +19,7 @@ pub const FOOD_Y: f32 = 0.0;
 pub const WALL_BOUNCE_MIN_ANGLE: f32 = 30.0;
 pub const WALL_THICKNESS: f32 = 2.0;
 
-pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
+pub const INITIAL_FOOD_AMOUNT: f32 = 5000.0;
 pub const FOOD_CELL_RADIUS: f32 = GRID_SIZE * 0.3;
 
 // Ant-density grid: coarse per-cell ant counts used for crowd avoidance and
@@ -32,10 +32,15 @@ pub const DENSITY_AHEAD_DISTANCE: f32 = 12.0;
 /// Lateral probe offset at the forward probe point.
 pub const DENSITY_SIDE_DISTANCE: f32 = 8.0;
 /// Ants per density cell above which movement slows and turns away.
-pub const DENSITY_CROWDED_THRESHOLD: u32 = 5;
+pub const DENSITY_CROWDED_THRESHOLD: u32 = 10;
 /// Speed multiplier while crowded.
 pub const DENSITY_SLOWDOWN_FACTOR: f32 = 0.8;
 /// Fraction of the max turn rate used for crowd-avoidance turns.
-pub const DENSITY_AVOIDANCE_TURN_FACTOR: f32 = 0.6;
+pub const DENSITY_AVOIDANCE_TURN_FACTOR: f32 = 0.35;
 /// Deposit suppression strength per occupying ant: `1 / (1 + k * density)`.
-pub const DENSITY_DEPOSIT_SUPPRESSION: f32 = 1.5;
+/// Kept small so an emerging (and therefore crowded) trail is not starved of
+/// the deposits that created it.
+pub const DENSITY_DEPOSIT_SUPPRESSION: f32 = 0.15;
+/// Lower bound for [`DENSITY_DEPOSIT_SUPPRESSION`]; even the most crowded cell
+/// keeps this fraction of a deposit so trails can always bootstrap.
+pub const DENSITY_DEPOSIT_SUPPRESSION_FLOOR: f32 = 0.25;

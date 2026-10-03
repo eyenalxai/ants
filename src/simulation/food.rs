@@ -1,6 +1,7 @@
 //! Food storage: single source of truth for food amounts and their markers.
 
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -15,9 +16,12 @@ pub struct FoodMarker {
 }
 
 /// Amounts and marker entities for every food cell in the world.
+///
+/// Amounts live in a `BTreeMap` so nearest-cell scans iterate in a stable
+/// order; tie-breaking must not depend on hash-map randomization.
 #[derive(Resource, Default)]
 pub struct FoodGrid {
-    amounts: HashMap<u32, f32>,
+    amounts: BTreeMap<u32, f32>,
     markers: HashMap<u32, Entity>,
 }
 

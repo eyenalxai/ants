@@ -123,6 +123,22 @@ impl Ant {
 #[derive(Resource, Default)]
 pub struct AntPopulation(pub usize);
 
+/// Deterministic per-ant random source for steering and wandering.
+///
+/// Keeping the RNG on the ant (rather than using the thread-local generator)
+/// makes a seeded run reproducible no matter which executor thread steps the
+/// ant, and keeps the ants independent of each other's draw order.
+#[derive(Component)]
+pub struct AntRng(pub(crate) fastrand::Rng);
+
+impl AntRng {
+    /// Deterministic stream for the `n`-th ant ever spawned.
+    pub(crate) fn for_spawn(n: u64) -> Self {
+        let seed = n.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(31) ^ 0xA5A5_5A5A_5A5A_5A5A;
+        Self(fastrand::Rng::with_seed(seed))
+    }
+}
+
 #[derive(Resource)]
 pub struct AntSpawner {
     pub timer: Timer,
@@ -137,6 +153,7 @@ pub fn spawn_ants(
     colony: Res<ColonyStats>,
     time: Res<Time<Fixed>>,
     nest_query: Query<&Transform, With<Nest>>,
+    mut spawn_counter: Local<u64>,
 ) {
     spawner.timer.tick(time.delta());
 
@@ -160,11 +177,20 @@ pub fn spawn_ants(
         .min(capacity);
 
     for _ in 0..batch_size {
-        let heading = fastrand::f32() * 2.0 * PI;
-        let spawn_angle = fastrand::f32() * 2.0 * PI;
+        let spawn_index = spawn_counter.wrapping_add(1);
+        *spawn_counter = spawn_index;
+
+        // Every draw for this ant comes from its own seeded stream, so the
+        // whole spawn is reproducible.
+        let mut rng = AntRng::for_spawn(spawn_index).0;
+
+        let heading = rng.f32() * 2.0 * PI;
+        let spawn_angle = rng.f32() * 2.0 * PI;
         // sqrt keeps the spawn distribution uniform over the nest disc.
-        let spawn_radius = NEST_RADIUS * fastrand::f32().sqrt();
+        let spawn_radius = NEST_RADIUS * rng.f32().sqrt();
         let spawn_pos = nest_pos + Vec2::new(spawn_angle.cos(), spawn_angle.sin()) * spawn_radius;
+        let max_lifetime = ANT_LIFETIME * (ANT_LIFETIME_VARIATION_MIN + rng.f32());
+        let base_speed = ANT_SPEED * (ANT_SPEED_VARIATION_MIN + rng.f32());
 
         commands.spawn((
             Ant {
@@ -172,14 +198,15 @@ pub fn spawn_ants(
                 has_food: false,
                 home: nest_pos,
                 age: 0.0,
-                max_lifetime: ANT_LIFETIME * (ANT_LIFETIME_VARIATION_MIN + fastrand::f32()),
+                max_lifetime,
                 energy: 1.0,
                 phase: AntPhase::Nursing,
                 handling_timer: 0.0,
-                base_speed: ANT_SPEED * (ANT_SPEED_VARIATION_MIN + fastrand::f32()),
+                base_speed,
                 speed: 0.0,
                 trips_completed: 0,
             },
+            AntRng(rng),
             Sprite {
                 color: Color::srgba(1.0, 1.0, 1.0, ANT_ALPHA),
                 custom_size: Some(Vec2::new(ANT_SIZE, ANT_SIZE)),
@@ -295,15 +322,44 @@ mod tests {
     }
 
     #[test]
-    fn nursing_ends_after_a_quarter_of_life() {
+    fn nursing_ends_after_the_configured_fraction_of_life() {
         let mut ant = Ant::test_ant(0.0);
         ant.phase = AntPhase::Nursing;
         ant.max_lifetime = 40.0;
 
-        ant.age = 9.99;
+        let threshold = 40.0 * ANT_NURSING_LIFETIME_FRACTION;
+        ant.age = threshold - 0.01;
         assert!(!ant.nursing_over());
 
-        ant.age = 10.0;
+        ant.age = threshold;
         assert!(ant.nursing_over());
+    }
+
+    /// Guards the foraging economy: a median (base-speed, base-lifetime) ant
+    /// must be able to walk the default nest→food→nest circuit with both a
+    /// time and an energy margin. This failed after the realism update, which
+    /// is what starved emergent trails of successful return trips.
+    #[test]
+    fn median_ant_can_afford_the_default_round_trip() {
+        use crate::constants::world::{FOOD_X, NEST_X};
+
+        let distance = FOOD_X - NEST_X;
+        let outbound_time = distance / ANT_SPEED;
+        let laden_time = distance / (ANT_SPEED * CARRY_SPEED_FACTOR);
+        let trip_energy = outbound_time * ANT_ENERGY_DRAIN_RATE
+            + laden_time * ANT_ENERGY_DRAIN_RATE * ANT_CARRY_ENERGY_DRAIN_FACTOR;
+        let trip_time = ANT_LIFETIME * ANT_NURSING_LIFETIME_FRACTION
+            + outbound_time
+            + laden_time
+            + 2.0 * HANDLING_TIME;
+
+        assert!(
+            trip_energy < 0.8,
+            "straight round trip needs {trip_energy:.3} energy; keep a 20% margin"
+        );
+        assert!(
+            trip_time < ANT_LIFETIME * 0.8,
+            "straight round trip takes {trip_time:.1}s of a {ANT_LIFETIME:.0}s median life"
+        );
     }
 }

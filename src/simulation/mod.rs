@@ -8,6 +8,9 @@ pub mod deposit;
 pub mod food;
 pub mod movement;
 
+#[cfg(test)]
+mod trail_tests;
+
 use bevy::prelude::*;
 
 use crate::constants::ant::ANT_SPAWN_INTERVAL;

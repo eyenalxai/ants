@@ -15,7 +15,7 @@ use crate::constants::world::{
 };
 use crate::core::grid::{grid_to_world, world_to_grid};
 use crate::pheromone::grid::PheromoneGrid;
-use crate::simulation::ant::{Ant, AntPhase};
+use crate::simulation::ant::{Ant, AntPhase, AntRng};
 use crate::simulation::density::{AntDensity, crowd_response};
 use crate::simulation::food::FoodGrid;
 use sensors::read_sensors;
@@ -29,7 +29,7 @@ use wall::handle_wall_collision;
 /// Pheromone deposit is a separate serial pass in
 /// [`crate::simulation::deposit`].
 pub fn move_ants(
-    mut ant_query: Query<(&mut Ant, &mut Transform)>,
+    mut ant_query: Query<(&mut Ant, &mut Transform, Option<&mut AntRng>)>,
     time: Res<Time<Fixed>>,
     pheromone_grid: Res<PheromoneGrid>,
     food_grid: Res<FoodGrid>,
@@ -39,63 +39,94 @@ pub fn move_ants(
 
     ant_query
         .par_iter_mut()
-        .for_each(|(mut ant, mut transform)| {
-            let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
+        .for_each(|(mut ant, mut transform, ant_rng)| {
+            // Ants spawned by `spawn_ants` always carry an `AntRng`; the
+            // fallback keeps hand-built test ants stepping with a stable
+            // stream instead of the thread-local generator.
+            let mut fallback = fastrand::Rng::with_seed(0);
+            let mut ant_rng = ant_rng;
+            let rng: &mut fastrand::Rng = match ant_rng.as_mut() {
+                Some(rng) => &mut rng.0,
+                None => &mut fallback,
+            };
 
-            if ant.is_handling() {
-                ant.speed = 0.0;
-                return;
-            }
-
-            let mut target_speed = ant.base_speed;
-
-            match ant.phase {
-                AntPhase::Nursing => {
-                    target_speed *= NURSING_SPEED_FACTOR;
-                    steer_nursing(&mut ant, current_pos, delta);
-                }
-                AntPhase::Returning => {
-                    if ant.has_food {
-                        target_speed *= CARRY_SPEED_FACTOR;
-                    }
-                    let readings = read_sensors(&ant, current_pos, &pheromone_grid);
-                    steer_homeward(&mut ant, current_pos, &readings, delta);
-                }
-                AntPhase::Foraging if ant.has_food => {
-                    target_speed *= CARRY_SPEED_FACTOR;
-                    let readings = read_sensors(&ant, current_pos, &pheromone_grid);
-                    steer_homeward(&mut ant, current_pos, &readings, delta);
-                }
-                AntPhase::Foraging => {
-                    if let Some(food_pos) = sense_food(&ant, current_pos, &food_grid) {
-                        steer_towards_food(&mut ant, food_pos, current_pos, delta);
-                    } else {
-                        let readings = read_sensors(&ant, current_pos, &pheromone_grid);
-                        apply_steering(&mut ant, &readings, delta);
-                    }
-                }
-            }
-
-            // Nurses wander inside the crowded nest without reacting to it.
-            if ant.phase != AntPhase::Nursing {
-                let (speed_factor, turn_sign) = sample_crowding(&ant, current_pos, &density);
-
-                if turn_sign != 0.0 {
-                    ant.direction = (ant.direction
-                        + turn_sign * ANT_TURN_RATE * delta * DENSITY_AVOIDANCE_TURN_FACTOR)
-                        .rem_euclid(std::f32::consts::TAU);
-                }
-
-                target_speed *= speed_factor;
-            }
-
-            ant.speed = target_speed;
-            let (sin, cos) = ant.direction.sin_cos();
-            transform.translation.x += cos * target_speed * delta;
-            transform.translation.y += sin * target_speed * delta;
-
-            handle_wall_collision(&mut ant, &mut transform);
+            step_ant(
+                &mut ant,
+                &mut transform,
+                rng,
+                &pheromone_grid,
+                &food_grid,
+                &density,
+                delta,
+            );
         });
+}
+
+/// One ant's fixed step: phase steering, crowd response and movement.
+fn step_ant(
+    ant: &mut Ant,
+    transform: &mut Transform,
+    rng: &mut fastrand::Rng,
+    pheromone_grid: &PheromoneGrid,
+    food_grid: &FoodGrid,
+    density: &AntDensity,
+    delta: f32,
+) {
+    let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
+
+    if ant.is_handling() {
+        ant.speed = 0.0;
+        return;
+    }
+
+    let mut target_speed = ant.base_speed;
+
+    match ant.phase {
+        AntPhase::Nursing => {
+            target_speed *= NURSING_SPEED_FACTOR;
+            steer_nursing(ant, current_pos, delta, rng);
+        }
+        AntPhase::Returning => {
+            if ant.has_food {
+                target_speed *= CARRY_SPEED_FACTOR;
+            }
+            let readings = read_sensors(ant, current_pos, pheromone_grid);
+            steer_homeward(ant, current_pos, &readings, delta, rng);
+        }
+        AntPhase::Foraging if ant.has_food => {
+            target_speed *= CARRY_SPEED_FACTOR;
+            let readings = read_sensors(ant, current_pos, pheromone_grid);
+            steer_homeward(ant, current_pos, &readings, delta, rng);
+        }
+        AntPhase::Foraging => {
+            if let Some(food_pos) = sense_food(ant, current_pos, food_grid) {
+                steer_towards_food(ant, food_pos, current_pos, delta, rng);
+            } else {
+                let readings = read_sensors(ant, current_pos, pheromone_grid);
+                apply_steering(ant, &readings, delta, rng);
+            }
+        }
+    }
+
+    // Nurses wander inside the crowded nest without reacting to it.
+    if ant.phase != AntPhase::Nursing {
+        let (speed_factor, turn_sign) = sample_crowding(ant, current_pos, density);
+
+        if turn_sign != 0.0 {
+            ant.direction = (ant.direction
+                + turn_sign * ANT_TURN_RATE * delta * DENSITY_AVOIDANCE_TURN_FACTOR)
+                .rem_euclid(std::f32::consts::TAU);
+        }
+
+        target_speed *= speed_factor;
+    }
+
+    ant.speed = target_speed;
+    let (sin, cos) = ant.direction.sin_cos();
+    transform.translation.x += cos * target_speed * delta;
+    transform.translation.y += sin * target_speed * delta;
+
+    handle_wall_collision(ant, transform);
 }
 
 /// Probe the density grid ahead of the ant and to both sides.

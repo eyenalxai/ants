@@ -8,7 +8,9 @@ pub const ANT_BATCH_SIZE: usize = 100;
 pub const ANT_SPEED: f32 = 50.0;
 pub const ANT_SIZE: f32 = 2.0;
 pub const ANT_ALPHA: f32 = 0.005;
-pub const ANT_LIFETIME: f32 = 30.0;
+/// Base lifetime in seconds; variation spans [`ANT_LIFETIME_VARIATION_MIN`]
+/// to `min + 1`. Long enough for several nest-food round trips.
+pub const ANT_LIFETIME: f32 = 90.0;
 pub const ANT_LIFETIME_VARIATION_MIN: f32 = 0.5;
 pub const ANT_SPEED_VARIATION_MIN: f32 = 0.5;
 
@@ -27,14 +29,15 @@ pub const CARRY_AMOUNT: f32 = 1.0;
 /// Seconds an ant stands still after picking up or dropping off food.
 pub const HANDLING_TIME: f32 = 0.5;
 
-/// Energy lost per second while walking; a full tank lasts ~40 s on the move.
-pub const ANT_ENERGY_DRAIN_RATE: f32 = 0.025;
+/// Energy lost per second while walking; a full tank lasts ~125 s on the move,
+/// enough to reach food and carry it back.
+pub const ANT_ENERGY_DRAIN_RATE: f32 = 0.008;
 /// Extra energy-drain multiplier while carrying food.
-pub const ANT_CARRY_ENERGY_DRAIN_FACTOR: f32 = 1.5;
+pub const ANT_CARRY_ENERGY_DRAIN_FACTOR: f32 = 1.3;
 /// Below this fraction an ant abandons foraging and returns to the nest.
 pub const ANT_ENERGY_RETURN_THRESHOLD: f32 = 0.25;
 /// Fraction of `max_lifetime` spent nursing inside the nest.
-pub const ANT_NURSING_LIFETIME_FRACTION: f32 = 0.25;
+pub const ANT_NURSING_LIFETIME_FRACTION: f32 = 0.1;
 /// Nurses wander no farther than `NEST_RADIUS * this` from home.
 pub const NURSING_LEASH_FACTOR: f32 = 2.0;
 /// Nurses move at this fraction of their base speed.
@@ -58,9 +61,9 @@ pub const ANT_HOME_WEIGHT_TRAIL: f32 = 0.7;
 pub const ANT_HOME_HEADING_NOISE: f32 = 0.15;
 
 /// Short-range food olfaction range in world units.
-pub const FOOD_SENSE_RANGE: f32 = 10.0;
-/// Half-angle of the forward food-sensing cone.
-pub const FOOD_SENSE_HALF_ANGLE: f32 = PI / 3.0;
+pub const FOOD_SENSE_RANGE: f32 = 16.0;
+/// Half-angle of the forward food-sensing cone (`±90°`).
+pub const FOOD_SENSE_HALF_ANGLE: f32 = PI / 2.0;
 /// Centre-to-centre contact distance required to pick food up.
 pub const FOOD_PICKUP_RADIUS: f32 = ANT_SIZE * 1.5;
 

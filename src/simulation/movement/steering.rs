@@ -5,7 +5,7 @@ use std::f32::consts::PI;
 use bevy::prelude::*;
 
 use crate::constants::ant::*;
-use crate::constants::sensor::{NUM_SENSORS, SENSOR_ANGLE, SENSOR_SIGNAL_THRESHOLD};
+use crate::constants::sensor::{NUM_SENSORS, SENSOR_ANGLE};
 use crate::constants::world::NEST_RADIUS;
 use crate::simulation::ant::Ant;
 use crate::simulation::movement::sensors::sensor_offset;
@@ -46,7 +46,12 @@ pub fn trail_vector(ant: &Ant, readings: &[f32; NUM_SENSORS]) -> Option<Vec2> {
 /// Desired heading blending the followed trail with the home vector. The home
 /// vector dominates as the trail fades; with no trail at all the ant walks
 /// home with a small heading noise.
-pub fn homeward_desired(ant: &Ant, pos: Vec2, readings: &[f32; NUM_SENSORS]) -> f32 {
+pub fn homeward_desired(
+    ant: &Ant,
+    pos: Vec2,
+    readings: &[f32; NUM_SENSORS],
+    rng: &mut fastrand::Rng,
+) -> f32 {
     let to_home = ant.home - pos;
     let home_dir = (to_home.length_squared() > f32::EPSILON).then(|| to_home.normalize());
 
@@ -66,7 +71,7 @@ pub fn homeward_desired(ant: &Ant, pos: Vec2, readings: &[f32; NUM_SENSORS]) -> 
         }
         (Some(trail), None) => trail.y.atan2(trail.x),
         (None, Some(home)) => {
-            let noise = (fastrand::f32() - 0.5) * 2.0 * ANT_HOME_HEADING_NOISE;
+            let noise = (rng.f32() - 0.5) * 2.0 * ANT_HOME_HEADING_NOISE;
             home.y.atan2(home.x) + noise
         }
         (None, None) => ant.direction,
@@ -75,13 +80,25 @@ pub fn homeward_desired(ant: &Ant, pos: Vec2, readings: &[f32; NUM_SENSORS]) -> 
 
 /// Steer a returning ant: path integration blended with the `ToNest` trail,
 /// capped at one [`ANT_TURN_RATE`] step.
-pub fn steer_homeward(ant: &mut Ant, pos: Vec2, readings: &[f32; NUM_SENSORS], delta: f32) {
-    let desired = homeward_desired(ant, pos, readings);
+pub fn steer_homeward(
+    ant: &mut Ant,
+    pos: Vec2,
+    readings: &[f32; NUM_SENSORS],
+    delta: f32,
+    rng: &mut fastrand::Rng,
+) {
+    let desired = homeward_desired(ant, pos, readings, rng);
     turn_towards(ant, desired, ANT_TURN_RATE * delta);
 }
 
 /// Steer toward a sensed food position with a turn-rate-limited turn.
-pub fn steer_towards_food(ant: &mut Ant, food_pos: Vec2, pos: Vec2, delta: f32) {
+pub fn steer_towards_food(
+    ant: &mut Ant,
+    food_pos: Vec2,
+    pos: Vec2,
+    delta: f32,
+    rng: &mut fastrand::Rng,
+) {
     let offset = food_pos - pos;
 
     if offset.length_squared() <= f32::EPSILON {
@@ -89,47 +106,57 @@ pub fn steer_towards_food(ant: &mut Ant, food_pos: Vec2, pos: Vec2, delta: f32) 
     }
 
     let max_turn = ANT_TURN_RATE * delta;
-    let jitter = (fastrand::f32() - 0.5) * max_turn * 0.25;
+    let jitter = (rng.f32() - 0.5) * max_turn * 0.25;
     turn_towards(ant, offset.y.atan2(offset.x) + jitter, max_turn);
 }
 
 /// Nurses wander near the nest and are pulled home when they drift too far.
-pub fn steer_nursing(ant: &mut Ant, pos: Vec2, delta: f32) {
+pub fn steer_nursing(ant: &mut Ant, pos: Vec2, delta: f32, rng: &mut fastrand::Rng) {
     let leash = NEST_RADIUS * NURSING_LEASH_FACTOR;
     let to_home = ant.home - pos;
 
     if to_home.length_squared() > leash * leash {
-        let noise = (fastrand::f32() - 0.5) * 2.0 * ANT_HOME_HEADING_NOISE;
+        let noise = (rng.f32() - 0.5) * 2.0 * ANT_HOME_HEADING_NOISE;
         turn_towards(
             ant,
             to_home.y.atan2(to_home.x) + noise,
             ANT_TURN_RATE * delta,
         );
-    } else if fastrand::f32() < ANT_RANDOM_TURN_CHANCE {
-        apply_random_turn(ant, delta * 0.5);
+    } else if rng.f32() < ANT_RANDOM_TURN_CHANCE {
+        apply_random_turn(ant, delta * 0.5, rng);
     }
 }
 
 /// Turn the ant toward the strongest pheromone reading (or wander randomly).
-pub fn apply_steering(ant: &mut Ant, sensor_readings: &[f32; NUM_SENSORS], delta: f32) {
+/// Readings are already gated per sensor by `SENSOR_SIGNAL_THRESHOLD`, so any
+/// non-zero total is a usable signal.
+pub fn apply_steering(
+    ant: &mut Ant,
+    sensor_readings: &[f32; NUM_SENSORS],
+    delta: f32,
+    rng: &mut fastrand::Rng,
+) {
     let total_intensity: f32 = sensor_readings.iter().sum();
+    let intensity_strength = (total_intensity / NUM_SENSORS as f32).min(1.0);
+    // A strong signal suppresses exploration so a busy trail is followed
+    // tightly; with no signal the ant explores at the full base rate.
+    let explore_chance = ANT_EXPLORATION_CHANCE * (1.0 - intensity_strength);
 
-    if total_intensity > SENSOR_SIGNAL_THRESHOLD && fastrand::f32() > ANT_EXPLORATION_CHANCE {
-        let use_probabilistic = fastrand::f32() < ANT_PROBABILISTIC_STEERING_CHANCE;
+    if total_intensity > 0.0 && rng.f32() > explore_chance {
+        let use_probabilistic = rng.f32() < ANT_PROBABILISTIC_STEERING_CHANCE;
 
         let target_direction = if use_probabilistic {
-            probabilistic_direction(ant, sensor_readings, total_intensity)
+            probabilistic_direction(ant, sensor_readings, total_intensity, rng)
         } else {
             weighted_direction(ant, sensor_readings)
         };
 
-        let intensity_strength = (total_intensity / NUM_SENSORS as f32).min(1.0);
         let max_turn = ANT_TURN_RATE
             * delta
             * (ANT_TURN_INTENSITY_BASE + intensity_strength * ANT_TURN_INTENSITY_SCALE);
         turn_towards(ant, target_direction, max_turn);
-    } else if fastrand::f32() < ANT_RANDOM_TURN_CHANCE {
-        apply_random_turn(ant, delta);
+    } else if rng.f32() < ANT_RANDOM_TURN_CHANCE {
+        apply_random_turn(ant, delta, rng);
     }
 }
 
@@ -137,8 +164,9 @@ fn probabilistic_direction(
     ant: &Ant,
     sensor_readings: &[f32; NUM_SENSORS],
     total_intensity: f32,
+    rng: &mut fastrand::Rng,
 ) -> f32 {
-    let random_value = fastrand::f32() * total_intensity;
+    let random_value = rng.f32() * total_intensity;
     let mut cumulative = 0.0;
     let mut chosen_angle = ant.direction;
 
@@ -150,7 +178,7 @@ fn probabilistic_direction(
         }
     }
 
-    let noise = (fastrand::f32() - 0.5) * SENSOR_ANGLE * ANT_STEERING_NOISE_FACTOR;
+    let noise = (rng.f32() - 0.5) * SENSOR_ANGLE * ANT_STEERING_NOISE_FACTOR;
     chosen_angle + noise
 }
 
@@ -169,8 +197,8 @@ fn weighted_direction(ant: &Ant, sensor_readings: &[f32; NUM_SENSORS]) -> f32 {
     }
 }
 
-fn apply_random_turn(ant: &mut Ant, delta: f32) {
-    let turn_amount = (fastrand::f32() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
+fn apply_random_turn(ant: &mut Ant, delta: f32, rng: &mut fastrand::Rng) {
+    let turn_amount = (rng.f32() - 0.5) * 2.0 * ANT_TURN_RATE * delta;
     ant.direction = (ant.direction + turn_amount).rem_euclid(2.0 * PI);
 }
 
@@ -203,10 +231,11 @@ mod tests {
     fn homeward_steering_prefers_home_when_there_is_no_trail() {
         let mut ant = Ant::test_ant(0.0);
         ant.home = Vec2::new(0.0, 100.0);
+        let mut rng = fastrand::Rng::with_seed(0);
 
         let readings = [0.0; NUM_SENSORS];
         for _ in 0..200 {
-            steer_homeward(&mut ant, Vec2::ZERO, &readings, 1.0 / 64.0);
+            steer_homeward(&mut ant, Vec2::ZERO, &readings, 1.0 / 64.0, &mut rng);
         }
 
         // Path integration should have turned the ant roughly northwards.
