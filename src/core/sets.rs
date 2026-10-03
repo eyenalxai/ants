@@ -52,6 +52,26 @@ pub enum SimSet {
     Visuals,
 }
 
+/// One-shot `Startup` sub-schedule, configured in exactly this chain order.
+///
+/// Command buffers of systems that ran concurrently are applied in
+/// completion order, so entity index allocation depends on executor timing
+/// unless startup spawners are ordered. Entity indices feed query iteration
+/// order, which the determinism replay compares, so every startup system that
+/// spawns entities belongs to one of these sets. The chain is configured once
+/// in [`crate::simulation::SimulationPlugin::add_fixed_step_systems`].
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StartupSet {
+    /// Camera, play-area walls and the nest marker.
+    World,
+    /// The initial food patch and its visual markers.
+    Food,
+    /// Static obstacle visuals.
+    Environment,
+    /// The founding colony and its brood.
+    Colony,
+}
+
 /// Read-only mirror of `Time<Virtual>`'s pause state.
 ///
 /// `Time<Virtual>` is the single source of truth: the HUD pause button toggles

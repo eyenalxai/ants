@@ -25,7 +25,7 @@ use bevy::prelude::*;
 
 use crate::constants::environment::{ACTIVITY_MIN, DAY_LENGTH};
 use crate::core::layers::Z_OBSTACLE;
-use crate::core::sets::SimSet;
+use crate::core::sets::{SimSet, StartupSet};
 
 /// Simulated wall-clock time and the current foraging-activity factor.
 #[derive(Resource)]
@@ -408,7 +408,10 @@ fn spawn_obstacle_visuals(
 pub fn register(app: &mut App) {
     app.init_resource::<Obstacles>()
         .add_systems(FixedUpdate, advance_sim_clock.in_set(SimSet::Clock))
-        .add_systems(Startup, spawn_obstacle_visuals);
+        .add_systems(
+            Startup,
+            spawn_obstacle_visuals.in_set(StartupSet::Environment),
+        );
 }
 
 #[cfg(test)]

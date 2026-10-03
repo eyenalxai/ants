@@ -412,6 +412,7 @@ mod tests {
         GRID_HEIGHT, GRID_WIDTH, NEST_X, NEST_Y, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH,
     };
     use crate::core::layers::Z_ANT;
+    use crate::core::sets::StartupSet;
     use crate::pheromone::PheromonePlugin;
     use crate::pheromone::grid::PheromoneGrid;
     use crate::simulation::Nest;
@@ -448,7 +449,7 @@ mod tests {
             .insert_resource(manual_time(1.0 / 64.0))
             .insert_resource(PerfEnabled(true))
             .add_systems(FixedUpdate, count_smoke_ticks)
-            .add_systems(Startup, food::setup_food_patch);
+            .add_systems(Startup, food::setup_food_patch.in_set(StartupSet::Food));
 
         SimulationPlugin::add_fixed_step_systems(&mut app);
 

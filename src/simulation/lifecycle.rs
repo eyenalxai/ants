@@ -28,7 +28,7 @@ use crate::constants::world::{
     PLAY_AREA_WIDTH,
 };
 use crate::core::grid::world_to_index;
-use crate::core::sets::SimSet;
+use crate::core::sets::{SimSet, StartupSet};
 use crate::simulation::NestPosition;
 use crate::simulation::ant::{Ant, AntPhase, AntPopulation, AntRng};
 use crate::simulation::colony::{ColonyStats, NestStore};
@@ -803,7 +803,7 @@ pub fn decay_corpses(
 /// allocation.
 pub fn register(app: &mut App) {
     app.init_resource::<Queen>()
-        .add_systems(Startup, spawn_founding_colony)
+        .add_systems(Startup, spawn_founding_colony.in_set(StartupSet::Colony))
         .add_systems(
             FixedUpdate,
             (

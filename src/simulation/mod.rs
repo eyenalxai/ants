@@ -22,7 +22,7 @@ use crate::constants::world::{
     NEST_RADIUS, NEST_X, NEST_Y, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH, WALL_THICKNESS,
 };
 use crate::core::layers::{Z_NEST, Z_WALL};
-use crate::core::sets::{GameSet, SimSet};
+use crate::core::sets::{GameSet, SimSet, StartupSet};
 use crate::perf::PerfEnabled;
 use ant::{Ant, AntPopulation, AntSpawner};
 
@@ -128,6 +128,21 @@ impl SimulationPlugin {
     pub(crate) fn add_fixed_step_systems(app: &mut App) {
         register_sim_resources(app);
 
+        // Startup spawners are ordered so entity indices do not depend on
+        // executor timing (see [`StartupSet`]). The chain covers every startup
+        // system that spawns simulation entities, including the ones `build`
+        // registers below.
+        app.configure_sets(
+            Startup,
+            (
+                StartupSet::World,
+                StartupSet::Food,
+                StartupSet::Environment,
+                StartupSet::Colony,
+            )
+                .chain(),
+        );
+
         // Stream hooks that belong to the simulation chain. They must be
         // registered exactly once, so `build` leaves them to this method.
         lifecycle::register(app);
@@ -206,7 +221,11 @@ impl Plugin for SimulationPlugin {
             if perf_enabled { "on" } else { "off" }
         );
 
-        app.add_systems(Startup, (setup_camera, spawn_world, food::setup_food_patch));
+        app.add_systems(
+            Startup,
+            (setup_camera, spawn_world).in_set(StartupSet::World),
+        );
+        app.add_systems(Startup, food::setup_food_patch.in_set(StartupSet::Food));
         // The nest transform follows the authoritative `NestPosition` in
         // `Update` (not in the fixed chain), so it is correct while paused.
         app.add_systems(Update, sync_nest_transform.after(GameSet::Editor));
