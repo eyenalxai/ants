@@ -1,7 +1,17 @@
-pub const SENSOR_DISTANCE: f32 = 40.0;
-pub const SENSOR_ANGLE: f32 = std::f32::consts::PI / 2.0;
+//! Sensing geometry shared by movement sensors and debug overlays.
+
+/// Outer sampling ring, also the length drawn by the sensor-cone overlay.
+pub const SENSOR_DISTANCE: f32 = 28.0;
+/// Half-angle of the sensor fan (`±60°`).
+pub const SENSOR_ANGLE: f32 = std::f32::consts::PI / 3.0;
 pub const NUM_SENSORS: usize = 9;
-pub const FULL_SCAN_SENSORS: usize = 16;
+/// Sampling rings from closest to farthest. The outer ring is [`SENSOR_DISTANCE`]
+/// so the overlay lines match what ants actually sample.
+pub const SENSOR_RING_DISTANCES: [f32; 3] = [6.0, 14.0, SENSOR_DISTANCE];
+/// Exponential attenuation length used across rings: `exp(-d / this)`.
+pub const SENSOR_RING_ATTENUATION: f32 = 12.0;
+/// Normalized readings below this divider are treated as no signal.
+pub const SENSOR_SIGNAL_THRESHOLD: f32 = 0.05;
 pub const SENSOR_CONE_MARKER_SIZE: f32 = 3.0;
 pub const SENSOR_CONE_ANT_MARKER_SIZE: f32 = 5.0;
 pub const SENSOR_CONE_LINE_WIDTH: f32 = 1.0;
