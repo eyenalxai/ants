@@ -13,9 +13,6 @@ use crate::ui::widgets;
 #[derive(Component)]
 pub struct FpsRoot;
 
-#[derive(Component)]
-pub struct FpsText;
-
 /// Marks the numeric span that [`fps_text_update_system`] writes to.
 #[derive(Component)]
 pub struct FpsValue;
@@ -57,7 +54,6 @@ pub fn setup_fps_counter(mut commands: Commands) {
 
     let text_fps = commands
         .spawn((
-            FpsText,
             Text::new("FPS: "),
             TextFont {
                 font_size: FontSize::Px(UI_FONT_SIZE),

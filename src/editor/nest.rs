@@ -1,10 +1,10 @@
 //! Nest tool: drag the nest (clamped inside the play area) and re-home ants.
 
-use bevy::log::{debug, warn_once};
+use bevy::log::debug;
 use bevy::prelude::*;
 
 use crate::constants::world::NEST_SIZE;
-use crate::editor::cursor::{cursor_world_pos, pointer_over_ui};
+use crate::editor::cursor::PointerInput;
 use crate::editor::{EditorMode, EditorModeKind};
 use crate::pheromone::grid::PheromoneGrid;
 use crate::simulation::NestPosition;
@@ -50,42 +50,30 @@ pub fn cancel_nest_drag_on_mode_exit(mode: Res<EditorMode>, mut drag: ResMut<Nes
 /// The drag writes the authoritative [`NestPosition`] and emits
 /// [`NestMoved`]; the nest transform is derived in `Update` by the simulation
 /// plugin.
-// `window` and `camera` cannot be joined: they live on different entities.
-#[allow(clippy::too_many_arguments)]
 pub fn handle_nest_drag(
-    mouse_button: Res<ButtonInput<MouseButton>>,
+    pointer: PointerInput,
     mut drag: ResMut<NestDrag>,
     mut nest_position: ResMut<NestPosition>,
     mut pheromone_grid: ResMut<PheromoneGrid>,
     mut messages: MessageWriter<NestMoved>,
-    ui_query: Query<&Interaction>,
-    window: Option<Single<&Window>>,
-    camera: Option<Single<(&Camera, &GlobalTransform)>>,
 ) {
     // Releasing anywhere (over UI, outside the play area or the window) ends
     // the drag.
-    if !mouse_button.pressed(MouseButton::Left) {
+    if !pointer.left_pressed() {
         drag.dragging = false;
         return;
     }
 
-    let (Some(window), Some(camera)) = (window, camera) else {
-        warn_once!("nest drag skipped: window or camera is unavailable");
+    let Some(world_pos) = pointer.world_pos() else {
         drag.dragging = false;
         return;
     };
 
-    let over_ui = pointer_over_ui(&ui_query);
-    let (camera, camera_transform) = camera.into_inner();
-    let Some(world_pos) = cursor_world_pos(window.into_inner(), camera, camera_transform) else {
-        drag.dragging = false;
-        return;
-    };
+    let over_ui = pointer.over_ui();
 
     if !drag.dragging {
-        let start = mouse_button.just_pressed(MouseButton::Left)
-            && !over_ui
-            && hits_nest(nest_position.0, world_pos);
+        let start =
+            pointer.left_just_pressed() && !over_ui && hits_nest(nest_position.0, world_pos);
 
         if !start {
             return;
@@ -126,7 +114,21 @@ pub fn apply_nest_move(mut messages: MessageReader<NestMoved>, mut ants: Query<&
 mod tests {
     use super::*;
     use crate::constants::world::{NEST_RADIUS, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
+    use crate::editor::cursor::test_support::{
+        clear_mouse_frame, pointer_world, press_mouse, release_mouse, set_cursor, world_to_window,
+    };
     use crate::simulation::Nest;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// A world with the nest drag state and the pointer fixtures.
+    fn drag_world(cursor: Vec2) -> World {
+        let mut world = pointer_world(cursor);
+        world.init_resource::<NestDrag>();
+        world.init_resource::<NestPosition>();
+        world.init_resource::<PheromoneGrid>();
+        world.init_resource::<Messages<NestMoved>>();
+        world
+    }
 
     #[test]
     fn hit_test_uses_half_the_nest_size() {
@@ -197,5 +199,70 @@ mod tests {
             from,
             "the transform is written by the Update sync, not by apply_nest_move"
         );
+    }
+
+    #[test]
+    fn nest_drag_starts_inside_the_nest_and_follows_the_cursor() {
+        let start = NestPosition::default().0;
+        let mut world = drag_world(world_to_window(start));
+
+        press_mouse(&mut world, MouseButton::Left);
+        world.run_system_once(handle_nest_drag).unwrap();
+
+        assert!(world.resource::<NestDrag>().dragging);
+        assert_eq!(
+            world.resource::<NestPosition>().0,
+            start,
+            "pressing without moving must not move the nest"
+        );
+
+        let target = Vec2::new(-100.0, 42.0);
+        set_cursor(&mut world, world_to_window(target));
+        clear_mouse_frame(&mut world);
+        world.run_system_once(handle_nest_drag).unwrap();
+
+        assert!(world.resource::<NestDrag>().dragging);
+        assert!(
+            world.resource::<NestPosition>().0.distance(target) < 1e-3,
+            "the nest follows the cursor to {target:?}"
+        );
+        assert_eq!(
+            world.resource::<Messages<NestMoved>>().len(),
+            1,
+            "the move is announced"
+        );
+    }
+
+    #[test]
+    fn nest_drag_cancels_on_release() {
+        let start = NestPosition::default().0;
+        let mut world = drag_world(world_to_window(start));
+
+        press_mouse(&mut world, MouseButton::Left);
+        world.run_system_once(handle_nest_drag).unwrap();
+        assert!(world.resource::<NestDrag>().dragging);
+
+        release_mouse(&mut world);
+        world.run_system_once(handle_nest_drag).unwrap();
+
+        assert!(!world.resource::<NestDrag>().dragging);
+        assert_eq!(world.resource::<NestPosition>().0, start);
+    }
+
+    #[test]
+    fn nest_drag_does_not_start_outside_the_nest_or_over_ui() {
+        // Far from the nest: the press is not a grab.
+        let mut world = drag_world(world_to_window(Vec2::ZERO));
+        press_mouse(&mut world, MouseButton::Left);
+        world.run_system_once(handle_nest_drag).unwrap();
+        assert!(!world.resource::<NestDrag>().dragging);
+
+        // Inside the nest radius, but the press lands on a UI widget.
+        let start = NestPosition::default().0;
+        let mut world = drag_world(world_to_window(start));
+        world.spawn(Interaction::Pressed);
+        press_mouse(&mut world, MouseButton::Left);
+        world.run_system_once(handle_nest_drag).unwrap();
+        assert!(!world.resource::<NestDrag>().dragging);
     }
 }

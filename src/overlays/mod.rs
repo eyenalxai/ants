@@ -68,6 +68,10 @@ pub fn toggle_pheromone_display(
 
 /// Uniformly sample one ant with reservoir sampling, without collecting the
 /// whole population into a `Vec`.
+///
+/// The draw uses `fastrand`'s global generator, so *which* ant is picked is
+/// intentionally outside the determinism contract: this only selects the debug
+/// overlay's subject and never feeds simulation state.
 pub fn random_ant(ants: impl Iterator<Item = Entity>) -> Option<Entity> {
     let mut chosen = None;
 
@@ -107,5 +111,27 @@ mod tests {
             .run_system_once(sensor_cone::draw_sensor_cone)
             .unwrap();
         world.run_system_once(toggle_pheromone_display).unwrap();
+    }
+
+    /// Reservoir sampling has to handle every population size; the pick
+    /// itself is not reproducible (global `fastrand`), so the test pins the
+    /// structural edges and that any pick is a live ant.
+    #[test]
+    fn random_ant_covers_empty_single_and_many_populations() {
+        assert_eq!(random_ant(std::iter::empty()), None);
+
+        let mut world = World::new();
+        let only = world.spawn_empty().id();
+        assert_eq!(random_ant(std::iter::once(only)), Some(only));
+
+        let ants: Vec<Entity> = (0..64).map(|_| world.spawn_empty().id()).collect();
+
+        for _ in 0..64 {
+            let picked = random_ant(ants.iter().copied()).expect("non-empty iterator");
+            assert!(
+                ants.contains(&picked),
+                "reservoir sampling picked {picked:?}"
+            );
+        }
     }
 }

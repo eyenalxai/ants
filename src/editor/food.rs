@@ -1,12 +1,11 @@
 //! Food brush tool: paint and erase food cells with the pointer.
 
-use bevy::log::warn_once;
 use bevy::prelude::*;
 
 use crate::constants::ui::FOOD_BRUSH_DIAMETER;
 use crate::constants::world::INITIAL_FOOD_AMOUNT;
 use crate::core::grid::{in_bounds, world_to_grid};
-use crate::editor::cursor::{cursor_world_pos, pointer_over_ui};
+use crate::editor::cursor::PointerInput;
 use crate::simulation::food::FoodGrid;
 
 /// Cells covered by the square food brush anchored at `origin` (top-left
@@ -29,36 +28,27 @@ pub fn brush_center_offset() -> UVec2 {
 /// in food mode (see the plugin run condition); clicks over UI are ignored.
 pub fn handle_food_clicks(
     mut commands: Commands,
-    mouse_button: Res<ButtonInput<MouseButton>>,
+    pointer: PointerInput,
     mut food_grid: ResMut<FoodGrid>,
-    ui_query: Query<&Interaction>,
-    window: Option<Single<&Window>>,
-    camera: Option<Single<(&Camera, &GlobalTransform)>>,
 ) {
-    if pointer_over_ui(&ui_query) {
+    if pointer.over_ui() {
         return;
     }
 
-    let (Some(window), Some(camera)) = (window, camera) else {
-        warn_once!("food clicks ignored: window or camera is unavailable");
-        return;
-    };
-
-    let (camera, camera_transform) = camera.into_inner();
-    let Some(world_pos) = cursor_world_pos(window.into_inner(), camera, camera_transform) else {
+    let Some(world_pos) = pointer.world_pos() else {
         return;
     };
     let Some(origin) = world_to_grid(world_pos) else {
         return;
     };
 
-    if mouse_button.pressed(MouseButton::Left) {
+    if pointer.left_pressed() {
         for cell in brush_cells(origin) {
             if !food_grid.contains(cell) {
                 food_grid.set(&mut commands, cell, INITIAL_FOOD_AMOUNT);
             }
         }
-    } else if mouse_button.pressed(MouseButton::Right) {
+    } else if pointer.right_pressed() {
         for cell in brush_cells(origin) {
             food_grid.remove(&mut commands, cell);
         }
@@ -69,6 +59,27 @@ pub fn handle_food_clicks(
 mod tests {
     use super::*;
     use crate::constants::world::{GRID_HEIGHT, GRID_WIDTH};
+    use crate::editor::cursor::test_support::{
+        TEST_WINDOW_SIZE, pointer_world, press_mouse, window_to_world,
+    };
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// A world with the food grid and the pointer fixtures; `ui` spawns a
+    /// pressed UI widget so the click lands over UI.
+    fn click_world(ui: bool) -> World {
+        let mut world = pointer_world(TEST_WINDOW_SIZE / 2.0);
+        world.init_resource::<FoodGrid>();
+
+        if ui {
+            world.spawn(Interaction::Pressed);
+        }
+
+        world
+    }
+
+    fn run_clicks(world: &mut World) {
+        world.run_system_once(handle_food_clicks).unwrap();
+    }
 
     #[test]
     fn brush_covers_a_square_in_the_interior() {
@@ -98,5 +109,44 @@ mod tests {
                 .iter()
                 .all(|cell| in_bounds(*cell) && cell.x == edge.x)
         );
+    }
+
+    #[test]
+    fn food_clicks_paint_and_erase_the_brush_cells() {
+        let mut world = click_world(false);
+        let center = window_to_world(TEST_WINDOW_SIZE / 2.0);
+        let origin = world_to_grid(center).expect("window center is inside the grid");
+        let painted: Vec<UVec2> = brush_cells(origin).collect();
+
+        press_mouse(&mut world, MouseButton::Left);
+        run_clicks(&mut world);
+
+        {
+            let food = world.resource::<FoodGrid>();
+
+            for cell in &painted {
+                assert!(food.contains(*cell), "left click paints {cell:?}");
+                assert_eq!(food.amount(*cell), Some(INITIAL_FOOD_AMOUNT));
+            }
+        }
+
+        press_mouse(&mut world, MouseButton::Right);
+        run_clicks(&mut world);
+
+        let food = world.resource::<FoodGrid>();
+
+        for cell in &painted {
+            assert!(!food.contains(*cell), "right click erases {cell:?}");
+        }
+    }
+
+    #[test]
+    fn food_clicks_over_ui_are_ignored() {
+        let mut world = click_world(true);
+
+        press_mouse(&mut world, MouseButton::Left);
+        run_clicks(&mut world);
+
+        assert_eq!(world.resource::<FoodGrid>().iter().count(), 0);
     }
 }

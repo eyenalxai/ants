@@ -15,10 +15,6 @@ use crate::simulation::ant::Ant;
 // place to update.
 use crate::simulation::movement::sensors::sensor_offset;
 
-/// Marker for every persistent sensor-cone entity.
-#[derive(Component)]
-pub struct SensorConeMarker;
-
 /// Which piece of the cone a persistent entity renders.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SensorConePart {
@@ -67,7 +63,6 @@ type ConePartsQuery<'w, 's> = Query<
 pub fn setup_sensor_cone(mut commands: Commands) {
     for index in 0..NUM_SENSORS {
         commands.spawn((
-            SensorConeMarker,
             SensorConePart::Line(index),
             Sprite {
                 color: Color::srgba(0.0, 1.0, 0.0, SENSOR_CONE_LINE_ALPHA),
@@ -82,7 +77,6 @@ pub fn setup_sensor_cone(mut commands: Commands) {
     for ring in 0..SENSOR_RING_DISTANCES.len() {
         for ray in 0..NUM_SENSORS {
             commands.spawn((
-                SensorConeMarker,
                 SensorConePart::Sensor { ray, ring },
                 Sprite {
                     color: Color::srgba(0.0, 1.0, 0.0, SENSOR_CONE_MARKER_ALPHA),
@@ -96,7 +90,6 @@ pub fn setup_sensor_cone(mut commands: Commands) {
     }
 
     commands.spawn((
-        SensorConeMarker,
         SensorConePart::Ant,
         Sprite {
             color: Color::srgba(1.0, 0.0, 0.0, SENSOR_CONE_ANT_ALPHA),

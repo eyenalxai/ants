@@ -9,10 +9,6 @@ use crate::constants::ui::{
 use crate::core::sets::Paused;
 use crate::editor::{EditorMode, EditorModeKind};
 
-/// Marker for a panel root spawned with [`spawn_panel`].
-#[derive(Component)]
-pub struct Panel;
-
 /// Behavior of a [`ToolButton`] on press.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonAction {
@@ -67,7 +63,6 @@ pub fn is_active(active_when: ButtonActiveWhen, mode: EditorModeKind, paused: bo
 /// Spawn a root panel with the shared translucent background and z-order.
 pub fn spawn_panel<'a>(commands: &'a mut Commands, node: Node, z_index: i32) -> EntityCommands<'a> {
     commands.spawn((
-        Panel,
         node,
         // The whole panel counts as UI for the editor tools, not just its buttons.
         Interaction::default(),

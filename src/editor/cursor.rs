@@ -1,5 +1,6 @@
 //! Persistent tool cursors and shared pointer helpers for the editor systems.
 
+use bevy::ecs::system::SystemParam;
 use bevy::log::warn_once;
 use bevy::prelude::*;
 
@@ -37,6 +38,56 @@ type NestCursorQuery<'w, 's> = Single<
     ),
     With<NestCursor>,
 >;
+
+/// Shared read-only pointer inputs for the editor systems: the primary window,
+/// the 2D camera, UI interaction state and mouse buttons.
+///
+/// Bundling them keeps the four pointer systems' signatures small and gives
+/// the missing-window/camera warn-once handling a single home.
+#[derive(SystemParam)]
+pub struct PointerInput<'w, 's> {
+    window: Option<Single<'w, 's, &'static Window>>,
+    camera: Option<Single<'w, 's, (&'static Camera, &'static GlobalTransform)>>,
+    ui: Query<'w, 's, &'static Interaction>,
+    mouse: Res<'w, ButtonInput<MouseButton>>,
+}
+
+impl PointerInput<'_, '_> {
+    /// Project the pointer into world space through the 2D camera.
+    ///
+    /// Returns `None` (warning once) when the window or camera is missing,
+    /// and `None` without warning when the cursor is outside the window or the
+    /// camera cannot map the position.
+    pub fn world_pos(&self) -> Option<Vec2> {
+        let (Some(window), Some(camera)) = (&self.window, &self.camera) else {
+            warn_once!("editor pointer unavailable: window or camera is missing");
+            return None;
+        };
+
+        let (camera, camera_transform) = **camera;
+        cursor_world_pos(**window, camera, camera_transform)
+    }
+
+    /// True while any UI widget (panel or button) is hovered or pressed.
+    pub fn over_ui(&self) -> bool {
+        pointer_over_ui(&self.ui)
+    }
+
+    /// Whether the left mouse button is held.
+    pub fn left_pressed(&self) -> bool {
+        self.mouse.pressed(MouseButton::Left)
+    }
+
+    /// Whether the left mouse button was pressed this frame.
+    pub fn left_just_pressed(&self) -> bool {
+        self.mouse.just_pressed(MouseButton::Left)
+    }
+
+    /// Whether the right mouse button is held.
+    pub fn right_pressed(&self) -> bool {
+        self.mouse.pressed(MouseButton::Right)
+    }
+}
 
 /// True while any UI widget (panel or button) is hovered or pressed.
 pub fn pointer_over_ui(ui_query: &Query<&Interaction>) -> bool {
@@ -93,21 +144,18 @@ pub fn setup_cursors(mut commands: Commands) {
 /// or the pointer is over UI or outside the play area.
 pub fn update_food_cursor(
     mode: Res<EditorMode>,
-    ui_query: Query<&Interaction>,
-    window: Option<Single<&Window>>,
-    camera: Option<Single<(&Camera, &GlobalTransform)>>,
+    pointer: PointerInput,
     cursor: Option<FoodCursorQuery>,
 ) {
-    let (Some(window), Some(camera), Some(cursor)) = (window, camera, cursor) else {
-        warn_once!("food cursor not updated: window, camera or cursor entity is missing");
+    let Some(cursor) = cursor else {
+        warn_once!("food cursor not updated: cursor entity is missing");
         return;
     };
 
     let (mut transform, mut visibility) = cursor.into_inner();
-    let (camera, camera_transform) = camera.into_inner();
 
-    let world_pos = if mode.0 == EditorModeKind::Food && !pointer_over_ui(&ui_query) {
-        cursor_world_pos(window.into_inner(), camera, camera_transform)
+    let world_pos = if mode.0 == EditorModeKind::Food && !pointer.over_ui() {
+        pointer.world_pos()
     } else {
         None
     };
@@ -138,21 +186,18 @@ pub fn update_food_cursor(
 pub fn update_nest_cursor(
     mode: Res<EditorMode>,
     drag: Res<NestDrag>,
-    ui_query: Query<&Interaction>,
-    window: Option<Single<&Window>>,
-    camera: Option<Single<(&Camera, &GlobalTransform)>>,
+    pointer: PointerInput,
     cursor: Option<NestCursorQuery>,
 ) {
-    let (Some(window), Some(camera), Some(cursor)) = (window, camera, cursor) else {
-        warn_once!("nest cursor not updated: window, camera or cursor entity is missing");
+    let Some(cursor) = cursor else {
+        warn_once!("nest cursor not updated: cursor entity is missing");
         return;
     };
 
     let (mut transform, mut sprite, mut visibility) = cursor.into_inner();
-    let (camera, camera_transform) = camera.into_inner();
 
-    let world_pos = if mode.0 == EditorModeKind::Nest && !pointer_over_ui(&ui_query) {
-        cursor_world_pos(window.into_inner(), camera, camera_transform)
+    let world_pos = if mode.0 == EditorModeKind::Nest && !pointer.over_ui() {
+        pointer.world_pos()
     } else {
         None
     };
@@ -188,6 +233,104 @@ pub fn update_nest_cursor(
     }
 }
 
+/// Headless pointer fixtures shared by the editor click tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use bevy::camera::{RenderTargetInfo, ScalingMode, Viewport};
+    use bevy::prelude::*;
+    use bevy::window::WindowResolution;
+
+    /// Window size shared by the pointer fixtures, in logical pixels.
+    pub(crate) const TEST_WINDOW_SIZE: Vec2 = Vec2::new(800.0, 600.0);
+
+    /// Build a headless world with one window (cursor at `cursor`) and one
+    /// camera that maps window pixels 1:1 to world units, centered on the
+    /// window: window position `(0, 0)` is world `(-400, 300)` and the window
+    /// center is world `(0, 0)`.
+    ///
+    /// The camera is configured the way Bevy's own camera tests do it, since
+    /// `camera_system` does not run headless: a viewport with a target size
+    /// and a matching orthographic projection matrix.
+    pub(crate) fn pointer_world(cursor: Vec2) -> World {
+        let mut world = World::new();
+
+        let mut window = Window {
+            resolution: WindowResolution::new(TEST_WINDOW_SIZE.x as u32, TEST_WINDOW_SIZE.y as u32),
+            ..default()
+        };
+        window.set_cursor_position(Some(cursor));
+        world.spawn(window);
+
+        let viewport = Viewport {
+            physical_size: TEST_WINDOW_SIZE.as_uvec2(),
+            ..default()
+        };
+        let mut camera = Camera {
+            viewport: Some(viewport),
+            ..default()
+        };
+        camera.computed.target_info = Some(RenderTargetInfo {
+            physical_size: TEST_WINDOW_SIZE.as_uvec2(),
+            scale_factor: 1.0,
+        });
+        let mut projection = Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::WindowSize,
+            ..OrthographicProjection::default_2d()
+        });
+        projection.update(TEST_WINDOW_SIZE.x, TEST_WINDOW_SIZE.y);
+        camera.computed.clip_from_view = projection.get_clip_from_view();
+        world.spawn((camera, GlobalTransform::default()));
+
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world
+    }
+
+    /// World position of a window cursor position in [`pointer_world`].
+    pub(crate) fn window_to_world(cursor: Vec2) -> Vec2 {
+        Vec2::new(
+            cursor.x - TEST_WINDOW_SIZE.x / 2.0,
+            TEST_WINDOW_SIZE.y / 2.0 - cursor.y,
+        )
+    }
+
+    /// Window cursor position that [`pointer_world`] maps to `world`.
+    pub(crate) fn world_to_window(world: Vec2) -> Vec2 {
+        Vec2::new(
+            world.x + TEST_WINDOW_SIZE.x / 2.0,
+            TEST_WINDOW_SIZE.y / 2.0 - world.y,
+        )
+    }
+
+    /// Move the cursor of the single window in `world`.
+    pub(crate) fn set_cursor(world: &mut World, cursor: Vec2) {
+        let window = {
+            let mut query = world.query_filtered::<Entity, With<Window>>();
+            query.single(world).expect("test window")
+        };
+        world
+            .get_mut::<Window>(window)
+            .expect("window component")
+            .set_cursor_position(Some(cursor));
+    }
+
+    /// Replace the mouse state with a fresh press of `button`.
+    pub(crate) fn press_mouse(world: &mut World, button: MouseButton) {
+        let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
+        mouse.reset_all();
+        mouse.press(button);
+    }
+
+    /// Keep the held buttons but clear this frame's just-pressed flags.
+    pub(crate) fn clear_mouse_frame(world: &mut World) {
+        world.resource_mut::<ButtonInput<MouseButton>>().clear();
+    }
+
+    /// Release every mouse button.
+    pub(crate) fn release_mouse(world: &mut World) {
+        world.resource_mut::<ButtonInput<MouseButton>>().reset_all();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +341,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<EditorMode>();
         world.insert_resource(NestDrag::default());
+        world.insert_resource(ButtonInput::<MouseButton>::default());
         world.spawn(Window::default());
         world.spawn((Camera::default(), GlobalTransform::default()));
         world.run_system_once(setup_cursors).unwrap();
@@ -268,6 +412,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<EditorMode>();
         world.insert_resource(NestDrag::default());
+        world.init_resource::<ButtonInput<MouseButton>>();
 
         world.run_system_once(update_food_cursor).unwrap();
         world.run_system_once(update_nest_cursor).unwrap();
