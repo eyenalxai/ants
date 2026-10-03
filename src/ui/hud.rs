@@ -12,6 +12,7 @@ use crate::core::sets::Paused;
 use crate::editor::{EditorMode, EditorModeKind, toggled_mode};
 use crate::simulation::ant::AntPopulation;
 use crate::simulation::colony::{ColonyStats, NestStore};
+use crate::simulation::lifecycle::Corpse;
 use crate::ui::widgets::{self, ButtonAction, ButtonActiveWhen, ToolButton};
 
 /// Top offset of the colony stats panel as a percentage, just below the
@@ -22,7 +23,8 @@ const UI_STATS_FONT_SIZE: f32 = 14.0;
 /// Text color of the colony stats panel.
 const UI_STATS_TEXT_COLOR: Color = Color::srgba(0.85, 0.85, 0.85, 1.0);
 /// Initial text of the colony stats panel, replaced on the first update.
-const COLONY_STATS_PLACEHOLDER: &str = "ants -   nest food -\ndelivery -/s   total -";
+const COLONY_STATS_PLACEHOLDER: &str =
+    "ants -   nest food -\ndelivery -/s   total -\ndeaths -   corpses -   refuse -";
 
 /// Marker for the "PAUSED" overlay root.
 #[derive(Component)]
@@ -41,49 +43,74 @@ pub struct ColonyStatsCache {
     store: i32,
     rate_tenths: i32,
     total: i32,
+    deaths: u32,
+    corpses: u32,
+    refuse: u32,
 }
 
 impl ColonyStatsCache {
     /// Quantize the live values to what the panel displays: whole ants and
     /// food, delivery rate to one decimal per second.
-    fn capture(population: usize, store: f32, rate: f32, total: f32) -> Self {
+    fn capture(
+        population: usize,
+        store: f32,
+        rate: f32,
+        total: f32,
+        deaths: u32,
+        corpses: u32,
+        refuse: u32,
+    ) -> Self {
         Self {
             population,
             store: store.round() as i32,
             rate_tenths: (rate * 10.0).round() as i32,
             total: total.round() as i32,
+            deaths,
+            corpses,
+            refuse,
         }
     }
 
     /// Panel text for this snapshot.
     fn render(&self) -> String {
         format!(
-            "ants {}   nest food {}\ndelivery {:.1}/s   total {}",
+            "ants {}   nest food {}\ndelivery {:.1}/s   total {}\ndeaths {}   corpses {}   refuse {}",
             self.population,
             self.store,
             self.rate_tenths as f32 / 10.0,
             self.total,
+            self.deaths,
+            self.corpses,
+            self.refuse,
         )
     }
 }
 
-/// Keep the colony stats panel in sync with the food economy.
+/// Keep the colony stats panel in sync with the food economy and the
+/// mortality bookkeeping.
 ///
 /// Runs in `Update`; the fixed-step chain only mutates the resources, so while
 /// the colony is paused or stable the cached snapshot matches and the text is
-/// left untouched.
+/// left untouched. The corpse count is a direct entity count (no extra
+/// counter to drift).
 pub fn update_colony_stats_hud(
     population: Res<AntPopulation>,
     store: Res<NestStore>,
     colony: Res<ColonyStats>,
+    corpses: Query<&Corpse>,
     mut text_query: Query<(&mut Text, &mut ColonyStatsCache), With<ColonyStatsText>>,
 ) {
+    let corpse_count = corpses.iter().count() as u32;
+
     for (mut text, mut cache) in &mut text_query {
         let snapshot = ColonyStatsCache::capture(
-            population.0,
+            population.count(),
             store.food(),
             colony.delivery_ema,
             colony.total_food_delivered,
+            colony.deaths,
+            corpse_count,
+            colony.refuse,
         );
 
         if *cache == snapshot {
@@ -257,21 +284,51 @@ mod tests {
 
     #[test]
     fn stats_cache_quantizes_to_what_is_displayed() {
-        let base = ColonyStatsCache::capture(100, 150.4, 2.04, 10.4);
-        assert_eq!(base, ColonyStatsCache::capture(100, 150.1, 2.01, 10.1));
-        assert_ne!(base, ColonyStatsCache::capture(101, 150.4, 2.04, 10.4));
-        assert_ne!(base, ColonyStatsCache::capture(100, 150.6, 2.04, 10.4));
-        assert_ne!(base, ColonyStatsCache::capture(100, 150.4, 2.06, 10.4));
-        assert_ne!(base, ColonyStatsCache::capture(100, 150.4, 2.04, 10.6));
+        let base = ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 1);
+        assert_eq!(
+            base,
+            ColonyStatsCache::capture(100, 150.1, 2.01, 10.1, 3, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(101, 150.4, 2.04, 10.4, 3, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.6, 2.04, 10.4, 3, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.06, 10.4, 3, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.6, 3, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 4, 2, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 3, 1)
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 2)
+        );
     }
 
     #[test]
-    fn stats_cache_renders_population_store_rate_and_total() {
-        let text = ColonyStatsCache::capture(1234, 812.4, 12.34, 4567.0).render();
+    fn stats_cache_renders_economy_and_mortality() {
+        let text = ColonyStatsCache::capture(1234, 812.4, 12.34, 4567.0, 5, 3, 2).render();
         assert!(text.contains("ants 1234"), "{text}");
         assert!(text.contains("nest food 812"), "{text}");
         assert!(text.contains("delivery 12.3/s"), "{text}");
         assert!(text.contains("total 4567"), "{text}");
+        assert!(text.contains("deaths 5"), "{text}");
+        assert!(text.contains("corpses 3"), "{text}");
+        assert!(text.contains("refuse 2"), "{text}");
     }
 
     #[test]
@@ -282,13 +339,15 @@ mod tests {
         world.init_resource::<ColonyStats>();
         world.run_system_once(setup_hud).unwrap();
 
-        world.resource_mut::<AntPopulation>().0 = 1234;
-        world.resource_mut::<NestStore>().food = 812.4;
+        world.resource_mut::<AntPopulation>().add(1234);
+        world.insert_resource(NestStore::with_food(812.4));
         {
             let mut colony = world.resource_mut::<ColonyStats>();
             colony.delivery_ema = 12.34;
             colony.total_food_delivered = 4567.0;
         }
+        world.spawn((Corpse { ttl: 10.0 }, Transform::from_xyz(0.0, 0.0, 0.0)));
+        world.spawn((Corpse { ttl: 10.0 }, Transform::from_xyz(1.0, 0.0, 0.0)));
 
         world.run_system_once(update_colony_stats_hud).unwrap();
 
@@ -303,6 +362,10 @@ mod tests {
             rendered.contains("12.3") && rendered.contains("4567"),
             "{rendered}"
         );
+        assert!(
+            rendered.contains("deaths 0") && rendered.contains("corpses 2"),
+            "{rendered}"
+        );
 
         // A sub-display change must not touch the text.
         let before = world
@@ -310,7 +373,7 @@ mod tests {
             .get_change_ticks::<Text>()
             .unwrap()
             .changed;
-        world.resource_mut::<NestStore>().food = 812.1;
+        world.insert_resource(NestStore::with_food(812.1));
         world.resource_mut::<ColonyStats>().delivery_ema = 12.31;
         world.run_system_once(update_colony_stats_hud).unwrap();
         assert_eq!(
@@ -323,7 +386,8 @@ mod tests {
         );
 
         // A displayed change does.
-        world.resource_mut::<NestStore>().food = 700.0;
+        world.insert_resource(NestStore::with_food(700.0));
+        world.resource_mut::<ColonyStats>().record_death();
         world.run_system_once(update_colony_stats_hud).unwrap();
         assert_ne!(
             before,
@@ -333,7 +397,9 @@ mod tests {
                 .unwrap()
                 .changed
         );
-        assert!(world.get::<Text>(entity).unwrap().0.contains("700"));
+        let rendered = world.get::<Text>(entity).unwrap().0.clone();
+        assert!(rendered.contains("700"), "{rendered}");
+        assert!(rendered.contains("deaths 1"), "{rendered}");
     }
 
     #[test]

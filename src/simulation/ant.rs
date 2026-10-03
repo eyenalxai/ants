@@ -6,13 +6,17 @@ use std::f32::consts::PI;
 
 use crate::constants::ant::*;
 use crate::constants::colony::{
-    ENERGY_FULL_EPS, ENERGY_REFILL_COST, ENERGY_REFILL_RATE, NURSE_UPKEEP_PER_ANT,
-    RECRUIT_THRESHOLD,
+    CROP_CAPACITY_MAX, CROP_CAPACITY_MIN, ENERGY_FULL_EPS, ENERGY_REFILL_COST, ENERGY_REFILL_RATE,
+    EXPLORE_TENDENCY_MAX, EXPLORE_TENDENCY_MIN, FORAGE_THRESHOLD_MAX, FORAGE_THRESHOLD_MIN,
+    NURSE_UPKEEP_PER_ANT, PI_BIAS_MAX_DEG, PI_BIAS_MIN_DEG, RECRUIT_THRESHOLD, SENSOR_GAIN_MAX,
+    SENSOR_GAIN_MIN,
 };
 use crate::constants::world::NEST_RADIUS;
 use crate::core::layers::Z_ANT;
 use crate::simulation::NestPosition;
 use crate::simulation::colony::{ColonyStats, NestStore};
+use crate::simulation::lifecycle::spawn_corpse;
+use crate::simulation::nest::NestGeometry;
 
 /// Behavioral phase of an ant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -75,6 +79,10 @@ pub struct Ant {
     pub carrying_quality: f32,
     /// Seconds left resting after a delivery. Owner: colony stream.
     pub rest_timer: f32,
+    /// True while the ant drags a corpse to the refuse pile. The necrophoresis
+    /// pass owns the ant until then: movement, collision and deposit skip it
+    /// because [`Ant::tick_handling`] holds `handling_timer` while this is set.
+    pub carrying_corpse: bool,
 }
 
 impl Ant {
@@ -96,9 +104,79 @@ impl Ant {
     }
 
     /// Count down the handling pause.
+    ///
+    /// Held while the ant carries a corpse: [`crate::simulation::lifecycle`]
+    /// keeps the ant "busy" for the whole trip to the refuse pile so movement,
+    /// collision and deposit leave it alone, and releases it on dropoff.
     pub fn tick_handling(&mut self, dt: f32) {
+        if self.carrying_corpse {
+            return;
+        }
+
         if self.handling_timer > 0.0 {
             self.handling_timer = (self.handling_timer - dt).max(0.0);
+        }
+    }
+
+    /// Count down the post-delivery rest timer.
+    pub fn tick_rest(&mut self, dt: f32) {
+        if self.rest_timer > 0.0 {
+            self.rest_timer = (self.rest_timer - dt).max(0.0);
+        }
+    }
+
+    /// Load `amount` of food of the given `quality` into the crop.
+    ///
+    /// `has_food` mirrors `carrying > 0` for the legacy consumers; both are
+    /// written here and in [`Ant::deliver`] so they can never disagree.
+    pub fn pick_up(&mut self, amount: f32, quality: f32) {
+        self.carrying = amount.max(0.0);
+        self.has_food = self.carrying > 0.0;
+        self.carrying_quality = quality;
+
+        if self.has_food {
+            self.start_handling();
+        }
+    }
+
+    /// Complete a dropoff: clear the carry, count the trip and resume
+    /// foraging. Returns the amount actually delivered.
+    pub fn deliver(&mut self) -> f32 {
+        let delivered = self.carrying.max(0.0);
+        self.carrying = 0.0;
+        self.has_food = false;
+        self.carrying_quality = 1.0;
+        self.phase = AntPhase::Foraging;
+        self.trips_completed = self.trips_completed.saturating_add(1);
+        self.start_handling();
+        delivered
+    }
+
+    /// Foraging → Returning: the tank is low, head home.
+    pub fn begin_returning(&mut self) {
+        if self.phase == AntPhase::Foraging {
+            self.phase = AntPhase::Returning;
+        }
+    }
+
+    /// Returning → Foraging: home with a full tank.
+    pub fn arrive_home(&mut self) {
+        if self.phase == AntPhase::Returning {
+            self.phase = AntPhase::Foraging;
+        }
+    }
+
+    /// Nursing → Foraging: age or colony demand matured the ant.
+    pub fn mature(&mut self) {
+        if self.phase == AntPhase::Nursing {
+            self.phase = AntPhase::Foraging;
+        }
+    }
+
+    /// Foraging → Nursing: demand-driven reversion of an empty forager (F7).
+    pub fn revert_to_nursing(&mut self) {
+        if self.phase == AntPhase::Foraging && !self.is_laden() {
+            self.phase = AntPhase::Nursing;
         }
     }
 
@@ -122,27 +200,29 @@ impl Ant {
 
             if self.energy >= 1.0 - ENERGY_FULL_EPS {
                 self.energy = 1.0;
-                if self.phase == AntPhase::Returning {
-                    self.phase = AntPhase::Foraging;
-                }
+                self.arrive_home();
             }
 
             return false;
         }
 
-        let drain_factor = if self.has_food {
-            ANT_CARRY_ENERGY_DRAIN_FACTOR
+        // Graded load penalty: an empty crop drains at 1.0, a full crop at
+        // ANT_CARRY_ENERGY_DRAIN_FACTOR. Partial loads (crop-limited pickups)
+        // cost proportionally less.
+        let load_fraction = if self.crop_capacity > 0.0 {
+            (self.carrying / self.crop_capacity).clamp(0.0, 1.0)
         } else {
-            1.0
+            0.0
         };
+        let drain_factor = 1.0 + (ANT_CARRY_ENERGY_DRAIN_FACTOR - 1.0) * load_fraction;
         self.energy -= ANT_ENERGY_DRAIN_RATE * drain_factor * dt;
 
         if self.energy <= 0.0 {
             return true;
         }
 
-        if self.energy < ANT_ENERGY_RETURN_THRESHOLD && self.phase == AntPhase::Foraging {
-            self.phase = AntPhase::Returning;
+        if self.energy < ANT_ENERGY_RETURN_THRESHOLD {
+            self.begin_returning();
         }
 
         false
@@ -184,11 +264,18 @@ impl Ant {
             crop_capacity: 1.0,
             carrying_quality: 1.0,
             rest_timer: 0.0,
+            carrying_corpse: false,
         }
     }
 }
 
 /// Current number of live ants, decremented when ants despawn.
+///
+/// Reads go through [`Self::count`], mutations through [`Self::add`] and
+/// [`Self::remove`]. The tuple field is still public only because the frozen
+/// `simulation::trail_tests` harness reads `.0` in two places; the integration
+/// stream should switch those reads to `count()` and then make the field
+/// private.
 #[derive(Resource, Default)]
 pub struct AntPopulation(pub usize);
 
@@ -200,9 +287,7 @@ impl AntPopulation {
 
     /// Record `n` new ants, saturating at `usize::MAX`.
     ///
-    /// Together with [`Self::remove`] these are the only mutation entry points
-    /// going forward; the field stays public until the biology stream
-    /// privatizes it.
+    /// Together with [`Self::remove`] these are the only mutation entry points.
     pub fn add(&mut self, n: usize) {
         self.0 = self.0.saturating_add(n);
     }
@@ -255,6 +340,7 @@ pub struct SpawnInputs<'w> {
     colony: Res<'w, ColonyStats>,
     nest_store: Res<'w, NestStore>,
     nest_position: Res<'w, NestPosition>,
+    nest_geometry: Res<'w, NestGeometry>,
 }
 
 /// Spawn new nurses at a ramped rate: slower near the population cap, faster
@@ -274,13 +360,15 @@ pub fn spawn_ants(
         return;
     }
 
-    let capacity = MAX_ANTS.saturating_sub(population.0);
+    let capacity = MAX_ANTS.saturating_sub(population.count());
     if capacity == 0 {
         return;
     }
 
     let nest_pos = inputs.nest_position.0;
-    let ramp = (1.0 - population.0 as f32 / MAX_ANTS as f32).clamp(0.0, 1.0);
+    let entrance = inputs.nest_geometry.entrance;
+    let entrance_radius = inputs.nest_geometry.entrance_radius.max(0.0);
+    let ramp = (1.0 - population.count() as f32 / MAX_ANTS as f32).clamp(0.0, 1.0);
     let batch_size = recruitment_batch(
         ramp,
         inputs.colony.delivery_boost(),
@@ -298,11 +386,28 @@ pub fn spawn_ants(
 
         let heading = rng.f32() * 2.0 * PI;
         let spawn_angle = rng.f32() * 2.0 * PI;
-        // sqrt keeps the spawn distribution uniform over the nest disc.
-        let spawn_radius = NEST_RADIUS * rng.f32().sqrt();
-        let spawn_pos = nest_pos + Vec2::new(spawn_angle.cos(), spawn_angle.sin()) * spawn_radius;
+        // sqrt keeps the spawn distribution uniform over the entrance disc.
+        let spawn_radius = entrance_radius * rng.f32().sqrt();
+        let spawn_pos = entrance + Vec2::new(spawn_angle.cos(), spawn_angle.sin()) * spawn_radius;
         let max_lifetime = ANT_LIFETIME * (ANT_LIFETIME_VARIATION_MIN + rng.f32());
         let base_speed = ANT_SPEED * (ANT_SPEED_VARIATION_MIN + rng.f32());
+
+        // Individual variation (F7), drawn from the same seeded stream. The
+        // ranges are documented in `constants/colony.rs`:
+        //   pi_bias          ±(5..10) degrees, fixed path-integration error
+        //   explore_tendency 0.5..1.5, scales the exploration chance
+        //   sensor_gain      0.7..1.3, scales sensor readings
+        //   forage_threshold 0.3..0.9, task-allocation response threshold
+        //   crop_capacity    0.8..1.2, load a full crop can hold
+        let pi_bias_sign = if rng.f32() < 0.5 { -1.0 } else { 1.0 };
+        let pi_bias_deg = PI_BIAS_MIN_DEG + rng.f32() * (PI_BIAS_MAX_DEG - PI_BIAS_MIN_DEG);
+        let pi_bias = pi_bias_sign * pi_bias_deg.to_radians();
+        let explore_tendency =
+            EXPLORE_TENDENCY_MIN + rng.f32() * (EXPLORE_TENDENCY_MAX - EXPLORE_TENDENCY_MIN);
+        let sensor_gain = SENSOR_GAIN_MIN + rng.f32() * (SENSOR_GAIN_MAX - SENSOR_GAIN_MIN);
+        let forage_threshold =
+            FORAGE_THRESHOLD_MIN + rng.f32() * (FORAGE_THRESHOLD_MAX - FORAGE_THRESHOLD_MIN);
+        let crop_capacity = CROP_CAPACITY_MIN + rng.f32() * (CROP_CAPACITY_MAX - CROP_CAPACITY_MIN);
 
         commands.spawn((
             Ant {
@@ -319,16 +424,17 @@ pub fn spawn_ants(
                 speed: 0.0,
                 trips_completed: 0,
                 route_memory: None,
-                pi_bias: 0.0,
+                pi_bias,
                 pi_drift: 0.0,
                 lost_time: 0.0,
                 prev_pos: spawn_pos,
-                forage_threshold: 0.5,
-                explore_tendency: 1.0,
-                sensor_gain: 1.0,
-                crop_capacity: 1.0,
+                forage_threshold,
+                explore_tendency,
+                sensor_gain,
+                crop_capacity,
                 carrying_quality: 1.0,
                 rest_timer: 0.0,
+                carrying_corpse: false,
             },
             AntRng(rng),
             Sprite {
@@ -340,11 +446,12 @@ pub fn spawn_ants(
         ));
     }
 
-    population.0 += batch_size;
+    population.add(batch_size);
 }
 
-/// Advance age, handling pauses and energy; despawn ants that die of old age
-/// or exhaustion, and refresh the home vector inside the nest.
+/// Advance age, handling pauses, rest and energy; replace ants that die of old
+/// age or exhaustion with a [`crate::simulation::lifecycle::Corpse`], and
+/// refresh the home vector inside the nest.
 ///
 /// Also drains the colony's nursing upkeep: every nursing ant consumes
 /// [`NURSE_UPKEEP_PER_ANT`] food per second from the store, so a colony
@@ -354,6 +461,7 @@ pub fn update_ant_energy_age(
     mut ant_query: Query<(Entity, &mut Ant, &Transform)>,
     mut population: ResMut<AntPopulation>,
     mut nest_store: ResMut<NestStore>,
+    mut colony: ResMut<ColonyStats>,
     nest_position: Res<NestPosition>,
     time: Res<Time<Fixed>>,
 ) {
@@ -364,14 +472,17 @@ pub fn update_ant_energy_age(
 
     for (entity, mut ant, transform) in &mut ant_query {
         ant.tick_handling(dt);
+        ant.tick_rest(dt);
         ant.age += dt;
 
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
         let in_nest = pos.distance_squared(nest_pos) < nest_radius_squared;
 
         if ant.age >= ant.max_lifetime || ant.tick_energy(dt, in_nest, &mut nest_store) {
+            spawn_corpse(&mut commands, pos);
             commands.entity(entity).despawn();
-            population.0 = population.0.saturating_sub(1);
+            population.remove(1);
+            colony.record_death();
             continue;
         }
 
@@ -379,12 +490,14 @@ pub fn update_ant_energy_age(
             nurses += 1;
         }
 
-        if in_nest {
+        // A corpse carrier keeps steering toward the refuse pile, so its home
+        // anchor must not be reset by crossing the nest disc.
+        if in_nest && !ant.carrying_corpse {
             ant.home = nest_pos;
         }
 
         if ant.phase == AntPhase::Nursing && ant.nursing_over() {
-            ant.phase = AntPhase::Foraging;
+            ant.mature();
         }
     }
 
@@ -453,7 +566,7 @@ mod tests {
     #[test]
     fn energy_drain_forces_returning_then_starvation() {
         let mut ant = Ant::test_ant(0.0);
-        let mut store = NestStore { food: 0.0 };
+        let mut store = NestStore::with_food(0.0);
         let dt = 1.0 / 64.0;
 
         let mut ticks = 0;
@@ -481,7 +594,7 @@ mod tests {
         ant.phase = AntPhase::Nursing;
         ant.energy = ANT_ENERGY_RETURN_THRESHOLD * 0.5;
 
-        let mut store = NestStore { food: 0.0 };
+        let mut store = NestStore::with_food(0.0);
         assert!(!ant.tick_energy(1.0, false, &mut store));
         assert_eq!(
             ant.phase,
@@ -493,16 +606,16 @@ mod tests {
     #[test]
     fn carrying_drains_faster_and_nest_refills() {
         let mut laden = Ant::test_ant(0.0);
-        laden.has_food = true;
+        laden.pick_up(1.0, 1.0);
         let mut walker = Ant::test_ant(0.0);
-        let mut empty = NestStore { food: 0.0 };
+        let mut empty = NestStore::with_food(0.0);
 
         laden.tick_energy(1.0, false, &mut empty);
         walker.tick_energy(1.0, false, &mut empty);
         assert!(laden.energy < walker.energy);
 
         laden.phase = AntPhase::Returning;
-        let mut stocked = NestStore { food: 10.0 };
+        let mut stocked = NestStore::with_food(10.0);
         assert!(!laden.tick_energy(1.0, true, &mut stocked));
         assert!((laden.energy - 1.0).abs() < EPS);
         assert_eq!(laden.phase, AntPhase::Foraging);
@@ -510,11 +623,110 @@ mod tests {
     }
 
     #[test]
+    fn carry_drain_is_graded_by_load_and_crop_capacity() {
+        let mut empty = Ant::test_ant(0.0);
+        let mut half = Ant::test_ant(0.0);
+        half.pick_up(0.5, 1.0);
+        let mut full = Ant::test_ant(0.0);
+        full.pick_up(1.0, 1.0);
+        let mut store = NestStore::with_food(0.0);
+
+        empty.tick_energy(1.0, false, &mut store);
+        half.tick_energy(1.0, false, &mut store);
+        full.tick_energy(1.0, false, &mut store);
+
+        let empty_drain = 1.0 - empty.energy;
+        let half_drain = 1.0 - half.energy;
+        let full_drain = 1.0 - full.energy;
+
+        assert!((empty_drain - ANT_ENERGY_DRAIN_RATE).abs() < EPS);
+        assert!(
+            empty_drain < half_drain && half_drain < full_drain,
+            "drain must grow with the load: {empty_drain} {half_drain} {full_drain}"
+        );
+
+        let expected_half =
+            ANT_ENERGY_DRAIN_RATE * (1.0 + (ANT_CARRY_ENERGY_DRAIN_FACTOR - 1.0) * 0.5);
+        assert!((half_drain - expected_half).abs() < EPS);
+        assert!((full_drain - ANT_ENERGY_DRAIN_RATE * ANT_CARRY_ENERGY_DRAIN_FACTOR).abs() < EPS);
+
+        // The same load on a bigger crop is a smaller fraction of the crop.
+        let mut big_crop = Ant::test_ant(0.0);
+        big_crop.crop_capacity = 2.0;
+        big_crop.pick_up(1.0, 1.0);
+        big_crop.tick_energy(1.0, false, &mut store);
+        let big_crop_drain = 1.0 - big_crop.energy;
+        assert!((big_crop_drain - expected_half).abs() < EPS);
+    }
+
+    #[test]
+    fn pick_up_and_deliver_keep_the_carry_contract() {
+        let mut ant = Ant::test_ant(0.0);
+        ant.pick_up(0.75, 1.5);
+        assert!(ant.is_laden());
+        assert!(ant.has_food, "the legacy flag must mirror the carry");
+        assert!((ant.carrying - 0.75).abs() < EPS);
+        assert!((ant.carrying_quality - 1.5).abs() < EPS);
+        assert!(ant.is_handling());
+
+        let delivered = ant.deliver();
+        assert!((delivered - 0.75).abs() < EPS);
+        assert!(!ant.is_laden());
+        assert!(!ant.has_food);
+        assert_eq!(ant.carrying, 0.0);
+        assert!((ant.carrying_quality - 1.0).abs() < EPS);
+        assert_eq!(ant.phase, AntPhase::Foraging);
+        assert_eq!(ant.trips_completed, 1);
+
+        // A zero-amount pickup must not flag a carry.
+        let mut empty = Ant::test_ant(0.0);
+        empty.pick_up(0.0, 1.0);
+        assert!(!empty.is_laden());
+        assert!(!empty.has_food);
+    }
+
+    #[test]
+    fn rest_timer_ticks_down_to_zero() {
+        let mut ant = Ant::test_ant(0.0);
+        ant.rest_timer = 4.0;
+
+        ant.tick_rest(1.0);
+        assert!((ant.rest_timer - 3.0).abs() < EPS);
+
+        ant.tick_rest(10.0);
+        assert_eq!(ant.rest_timer, 0.0, "the timer clamps at zero");
+    }
+
+    #[test]
+    fn phase_transition_methods_are_guarded() {
+        let mut ant = Ant::test_ant(0.0);
+
+        ant.phase = AntPhase::Nursing;
+        ant.begin_returning();
+        assert_eq!(ant.phase, AntPhase::Nursing, "nurses do not return");
+        ant.mature();
+        assert_eq!(ant.phase, AntPhase::Foraging);
+
+        ant.begin_returning();
+        assert_eq!(ant.phase, AntPhase::Returning);
+        ant.arrive_home();
+        assert_eq!(ant.phase, AntPhase::Foraging);
+
+        // A laden forager must not revert to nursing.
+        ant.pick_up(1.0, 1.0);
+        ant.revert_to_nursing();
+        assert_eq!(ant.phase, AntPhase::Foraging);
+        ant.deliver();
+        ant.revert_to_nursing();
+        assert_eq!(ant.phase, AntPhase::Nursing);
+    }
+
+    #[test]
     fn nest_refill_consumes_store_and_stalls_when_empty() {
         let dt = 1.0 / 64.0;
         let mut ant = Ant::test_ant(0.0);
         ant.energy = 0.2;
-        let mut store = NestStore { food: 10.0 };
+        let mut store = NestStore::with_food(10.0);
 
         // One second of refill: +0.5 energy for 0.05 food.
         for _ in 0..64 {
@@ -531,7 +743,7 @@ mod tests {
         assert!((store.food() - 9.92).abs() < 1e-3, "store {}", store.food());
 
         // Empty store: no refill, the ant drains again even in the nest.
-        store.food = 0.0;
+        store = NestStore::with_food(0.0);
         ant.energy = 0.5;
         for _ in 0..64 {
             ant.tick_energy(dt, true, &mut store);
@@ -544,14 +756,14 @@ mod tests {
     fn nest_refill_is_frame_rate_independent() {
         let mut fine = Ant::test_ant(0.0);
         fine.energy = 0.2;
-        let mut fine_store = NestStore { food: 10.0 };
+        let mut fine_store = NestStore::with_food(10.0);
         for _ in 0..64 {
             fine.tick_energy(1.0 / 64.0, true, &mut fine_store);
         }
 
         let mut coarse = Ant::test_ant(0.0);
         coarse.energy = 0.2;
-        let mut coarse_store = NestStore { food: 10.0 };
+        let mut coarse_store = NestStore::with_food(10.0);
         coarse.tick_energy(1.0, true, &mut coarse_store);
 
         assert!((fine.energy - coarse.energy).abs() < 1e-4);
@@ -609,7 +821,7 @@ mod tests {
         crate::simulation::register_sim_resources(&mut app);
 
         // Tests override the defaults after registration.
-        app.insert_resource(NestStore { food: store_food })
+        app.insert_resource(NestStore::with_food(store_food))
             .insert_resource(AntSpawner {
                 timer: Timer::from_seconds(0.01, TimerMode::Repeating),
             });
@@ -630,16 +842,93 @@ mod tests {
         assert!(spawned > 0, "a stocked colony must recruit");
         assert_eq!(
             spawned,
-            stocked.world().resource::<AntPopulation>().0,
+            stocked.world().resource::<AntPopulation>().count(),
             "AntPopulation must stay exact"
         );
 
         let mut starving = spawn_app(0.0);
         starving.update();
         starving.update();
-        assert_eq!(starving.world().resource::<AntPopulation>().0, 0);
+        assert_eq!(starving.world().resource::<AntPopulation>().count(), 0);
         let mut query = starving.world_mut().query::<&Ant>();
         assert_eq!(query.iter(starving.world()).count(), 0);
+    }
+
+    #[test]
+    fn spawn_variation_is_within_the_documented_ranges() {
+        let mut app = spawn_app(NEST_STORE_CAP);
+        app.update();
+        app.update();
+
+        let mut count = 0;
+        let mut query = app.world_mut().query::<&Ant>();
+
+        for ant in query.iter(app.world()) {
+            let bias_deg = ant.pi_bias.to_degrees().abs();
+            assert!(
+                (PI_BIAS_MIN_DEG..=PI_BIAS_MAX_DEG).contains(&bias_deg),
+                "pi_bias {bias_deg} deg outside ±{PI_BIAS_MIN_DEG}..{PI_BIAS_MAX_DEG}"
+            );
+            assert!(
+                (EXPLORE_TENDENCY_MIN..=EXPLORE_TENDENCY_MAX).contains(&ant.explore_tendency),
+                "explore_tendency {} outside the range",
+                ant.explore_tendency
+            );
+            assert!(
+                (SENSOR_GAIN_MIN..=SENSOR_GAIN_MAX).contains(&ant.sensor_gain),
+                "sensor_gain {} outside the range",
+                ant.sensor_gain
+            );
+            assert!(
+                (FORAGE_THRESHOLD_MIN..=FORAGE_THRESHOLD_MAX).contains(&ant.forage_threshold),
+                "forage_threshold {} outside the range",
+                ant.forage_threshold
+            );
+            assert!(
+                (CROP_CAPACITY_MIN..=CROP_CAPACITY_MAX).contains(&ant.crop_capacity),
+                "crop_capacity {} outside the range",
+                ant.crop_capacity
+            );
+            count += 1;
+        }
+
+        assert!(
+            count >= ANT_BATCH_SIZE,
+            "expected a full first batch, got {count}"
+        );
+
+        // Two spawns of the same stream are bit-identical.
+        let mut replay = spawn_app(NEST_STORE_CAP);
+        replay.update();
+        replay.update();
+        let mut first: Vec<(f32, f32, f32, f32, f32)> = query
+            .iter(app.world())
+            .map(|ant| {
+                (
+                    ant.pi_bias,
+                    ant.explore_tendency,
+                    ant.sensor_gain,
+                    ant.forage_threshold,
+                    ant.crop_capacity,
+                )
+            })
+            .collect();
+        let mut query = replay.world_mut().query::<&Ant>();
+        let mut second: Vec<(f32, f32, f32, f32, f32)> = query
+            .iter(replay.world())
+            .map(|ant| {
+                (
+                    ant.pi_bias,
+                    ant.explore_tendency,
+                    ant.sensor_gain,
+                    ant.forage_threshold,
+                    ant.crop_capacity,
+                )
+            })
+            .collect();
+        first.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        second.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(first, second, "spawn variation must be deterministic");
     }
 
     #[test]
@@ -652,7 +941,8 @@ mod tests {
             )))
             .insert_resource(NestPosition(Vec2::ZERO))
             .init_resource::<AntPopulation>()
-            .insert_resource(NestStore { food: 1.0 })
+            .init_resource::<ColonyStats>()
+            .insert_resource(NestStore::with_food(1.0))
             .add_systems(FixedUpdate, update_ant_energy_age);
 
         for _ in 0..2 {
@@ -661,7 +951,7 @@ mod tests {
             app.world_mut()
                 .spawn((ant, Transform::from_xyz(0.0, 0.0, 0.0)));
         }
-        app.world_mut().resource_mut::<AntPopulation>().0 = 2;
+        app.world_mut().resource_mut::<AntPopulation>().add(2);
 
         // The first frame only primes the virtual clock; the fixed step runs
         // on the second update.

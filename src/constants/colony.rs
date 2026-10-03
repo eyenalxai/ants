@@ -29,3 +29,45 @@ pub const NURSE_UPKEEP_PER_ANT: f32 = 0.0015;
 /// Store level at which recruitment is fully open. Below it the spawn batch is
 /// scaled linearly with the store; at zero the colony stops recruiting.
 pub const RECRUIT_THRESHOLD: f32 = 25.0;
+
+// --- Individual variation (F7) -------------------------------------------------
+//
+// Every range below is drawn uniformly from the ant's own seeded `AntRng` at
+// spawn, so a run stays bit-identical while individuals differ in behavior.
+// The navigation stream consumes `pi_bias`, `sensor_gain` and
+// `explore_tendency`; the colony stream consumes `forage_threshold` and
+// `crop_capacity`.
+
+/// Minimum magnitude of the fixed path-integration heading error, degrees.
+pub const PI_BIAS_MIN_DEG: f32 = 5.0;
+/// Maximum magnitude of the fixed path-integration heading error, degrees.
+pub const PI_BIAS_MAX_DEG: f32 = 10.0;
+/// Minimum individual exploration multiplier.
+pub const EXPLORE_TENDENCY_MIN: f32 = 0.5;
+/// Maximum individual exploration multiplier.
+pub const EXPLORE_TENDENCY_MAX: f32 = 1.5;
+/// Minimum individual sensor gain.
+pub const SENSOR_GAIN_MIN: f32 = 0.7;
+/// Maximum individual sensor gain.
+pub const SENSOR_GAIN_MAX: f32 = 1.3;
+/// Minimum task-allocation response threshold.
+pub const FORAGE_THRESHOLD_MIN: f32 = 0.3;
+/// Maximum task-allocation response threshold.
+pub const FORAGE_THRESHOLD_MAX: f32 = 0.9;
+/// Minimum individual crop capacity (full loads are `CARRY_AMOUNT`-sized).
+pub const CROP_CAPACITY_MIN: f32 = 0.8;
+/// Maximum individual crop capacity.
+pub const CROP_CAPACITY_MAX: f32 = 1.2;
+
+// --- Flexible task allocation (F7) --------------------------------------------
+
+/// Share of the colony that should be foraging; below it the forager shortage
+/// term of the stimulus rises toward 1.
+pub const TARGET_FORAGER_FRACTION: f32 = 0.7;
+/// Nurse share below which a satiated colony may push foragers back to
+/// nursing.
+pub const REVERSION_NURSE_RATIO: f32 = 0.15;
+/// Stimulus below which reversion is allowed (satiated, no forager shortage).
+pub const REVERSION_STIMULUS: f32 = 0.15;
+/// Per-second probability that an eligible forager reverts to nursing.
+pub const FORAGER_REVERSION_RATE: f32 = 0.005;

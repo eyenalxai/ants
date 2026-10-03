@@ -16,8 +16,20 @@ pub struct ColonyStats {
     /// [`tick_delivery_ema`] once per fixed step, so its equilibrium is the
     /// current delivery *rate* and it decays when foraging stops.
     pub delivery_ema: f32,
-    /// Food delivered since the last [`tick_delivery_ema`] step.
+    /// Food delivered since the last [`ColonyStats::tick_delivery_rate`] step.
+    ///
+    /// Tick contract: [`ColonyStats::record_delivery`] may be called any number
+    /// of times per fixed step (the Collide pass), and
+    /// [`ColonyStats::tick_delivery_rate`] must run exactly once per fixed
+    /// step, after Collide and before the next spawn batch reads
+    /// [`ColonyStats::delivery_boost`] (the Delivery set). It is the only
+    /// place that resets this field, and it preserves pending deliveries when
+    /// `dt <= 0`.
     pub delivered_this_tick: f32,
+    /// Ants that died (hazard, starvation or old age).
+    pub deaths: u32,
+    /// Corpses delivered to the refuse pile by necrophoresis.
+    pub refuse: u32,
 }
 
 impl ColonyStats {
@@ -27,6 +39,16 @@ impl ColonyStats {
     pub fn record_delivery(&mut self, amount: f32) {
         self.total_food_delivered += amount;
         self.delivered_this_tick += amount;
+    }
+
+    /// Record one ant death, whatever the cause.
+    pub fn record_death(&mut self) {
+        self.deaths = self.deaths.saturating_add(1);
+    }
+
+    /// Record one corpse delivered to the refuse pile.
+    pub fn record_refuse(&mut self) {
+        self.refuse = self.refuse.saturating_add(1);
     }
 
     /// Advance the delivery-rate EMA by `dt` seconds.
@@ -63,10 +85,14 @@ pub fn tick_delivery_ema(mut colony: ResMut<ColonyStats>, time: Res<Time<Fixed>>
 /// Food stored in the nest. Dropoffs are the only income; refills and nursing
 /// are the expenses. The store cannot go negative or above
 /// [`NEST_STORE_CAP`].
+///
+/// The amount is private: reads go through [`Self::food`], mutations through
+/// [`Self::add`] and [`Self::spend`], so the clamp invariant cannot be broken
+/// from outside this module.
 #[derive(Resource)]
 pub struct NestStore {
-    /// Food currently held by the nest.
-    pub food: f32,
+    /// Food currently held by the nest, always in `[0, NEST_STORE_CAP]`.
+    food: f32,
 }
 
 impl Default for NestStore {
@@ -78,11 +104,14 @@ impl Default for NestStore {
 }
 
 impl NestStore {
+    /// A store holding `food`, clamped to `[0, NEST_STORE_CAP]`.
+    pub fn with_food(food: f32) -> Self {
+        Self {
+            food: food.clamp(0.0, NEST_STORE_CAP),
+        }
+    }
+
     /// Food currently held by the nest.
-    ///
-    /// Read-only accessor for the store. The field stays public until the
-    /// biology stream privatizes it; mutation goes through [`Self::add`] and
-    /// [`Self::spend`] only.
     pub fn food(&self) -> f32 {
         self.food
     }
@@ -188,26 +217,49 @@ mod tests {
 
     #[test]
     fn nest_store_defaults_to_the_bootstrap_amount() {
-        assert!((NestStore::default().food - NEST_STORE_INITIAL).abs() < EPS);
+        assert!((NestStore::default().food() - NEST_STORE_INITIAL).abs() < EPS);
+    }
+
+    #[test]
+    fn nest_store_with_food_clamps_into_the_valid_range() {
+        assert_eq!(NestStore::with_food(-5.0).food(), 0.0);
+        assert_eq!(
+            NestStore::with_food(NEST_STORE_CAP + 5.0).food(),
+            NEST_STORE_CAP
+        );
+        assert!((NestStore::with_food(0.5).food() - 0.5).abs() < EPS);
     }
 
     #[test]
     fn nest_store_add_clamps_at_cap_and_spend_at_zero() {
-        let mut store = NestStore {
-            food: NEST_STORE_CAP - 1.0,
-        };
+        let mut store = NestStore::with_food(NEST_STORE_CAP - 1.0);
         store.add(50.0);
-        assert!((store.food - NEST_STORE_CAP).abs() < EPS);
+        assert!((store.food() - NEST_STORE_CAP).abs() < EPS);
 
-        store.food = 0.5;
+        let mut store = NestStore::with_food(0.5);
         assert!((store.spend(2.0) - 0.5).abs() < EPS);
-        assert_eq!(store.food, 0.0);
+        assert_eq!(store.food(), 0.0);
         assert_eq!(store.spend(1.0), 0.0);
-        assert_eq!(store.food, 0.0);
+        assert_eq!(store.food(), 0.0);
 
         // Negative or non-finite additions must not corrupt the store.
-        store.food = 1.0;
+        let mut store = NestStore::with_food(1.0);
         store.add(-5.0);
-        assert!((store.food - 1.0).abs() < EPS);
+        assert!((store.food() - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn death_and_refuse_counters_saturate() {
+        let mut stats = ColonyStats::default();
+        assert_eq!(stats.deaths, 0);
+        assert_eq!(stats.refuse, 0);
+
+        stats.record_death();
+        stats.record_refuse();
+        assert_eq!((stats.deaths, stats.refuse), (1, 1));
+
+        stats.deaths = u32::MAX;
+        stats.record_death();
+        assert_eq!(stats.deaths, u32::MAX, "death counting saturates");
     }
 }
