@@ -1,9 +1,29 @@
 # Ants
 
-Real-time 2D ant colony simulation built with [Bevy](https://bevyengine.org/) 0.17.
+Real-time 2D ant colony simulation built with [Bevy](https://bevyengine.org/) 0.19.1.
 Ants forage using two pheromone trails (to food and back to the nest), the colony
 grows to up to 30,000 ants, and both food sources and the nest can be edited at
 runtime. Debug overlays render the pheromone grid and the sensor cone of one ant.
+
+## Prerequisites
+
+The project requires **Rust 1.95 or newer** (Bevy 0.19.1's MSRV; CI checks the
+exact 1.95.0 toolchain). On Linux, Bevy also needs a few system development
+packages. On Debian/Ubuntu:
+
+```sh
+sudo apt-get install -y \
+  libasound2-dev \
+  libudev-dev \
+  libwayland-dev \
+  libxkbcommon-dev \
+  libx11-dev
+```
+
+CI installs exactly this list. On other distributions, install the equivalent
+ALSA, udev, Wayland, xkbcommon and X11 development packages; see Bevy's
+[platform setup guide](https://bevy.org/learn/quick-start/getting-started/setup/)
+for per-platform instructions.
 
 ## Quick start
 
@@ -11,7 +31,8 @@ runtime. Debug overlays render the pheromone grid and the sensor cone of one ant
 cargo run
 ```
 
-For faster iterative builds, opt into Bevy's dynamic linking:
+For faster iterative builds, opt into Bevy's dynamic linking (see
+[Dynamic linking](#dynamic-linking)):
 
 ```sh
 cargo run --features dynamic_linking
@@ -33,28 +54,62 @@ The code is organized into these modules:
 
 | Module | Responsibility |
 | --- | --- |
-| `core` | Grid geometry and world ↔ grid coordinate conversions. |
+| `core` | Grid geometry, render layers and schedule sets. |
 | `constants` | Tunable simulation constants (world, ants, sensors, pheromones). |
 | `simulation` | Ants, food, movement and pheromone deposit systems. |
 | `pheromone` | Two-pheromone grid storage, decay and queries. |
-| `overlays` | Debug rendering (pheromone visualization, sensor cone, FPS counter). |
+| `overlays` | Debug rendering: pheromone visualization and the sensor cone. |
 | `editor` | Runtime editing of food and the nest. |
-| `ui` | Buttons and other interface elements. |
+| `ui` | HUD: buttons, pause control and the FPS counter. |
 
-Simulation runs in `FixedUpdate`, so ant behaviour is decoupled from the render
-frame rate. Pausing freezes virtual time, which stops the fixed-step simulation
-while overlays, UI and editing keep responding.
+Simulation runs in `FixedUpdate` at a fixed 64 Hz, so ant behaviour is
+decoupled from the render frame rate. Pausing freezes virtual time, which stops
+the fixed-step simulation while overlays, UI and editing keep responding.
+
+### Randomness
+
+Every random draw (ant spawn jitter, steering noise, overlay ant selection)
+currently comes from the process-global `fastrand` generator. There is no seed
+and no simulation-owned RNG resource yet, so two runs with the same inputs are
+**not** reproducible; treat each run as an independent sample.
+
+### Testing
+
+The unit tests are headless: they build Bevy `App`s without a window, GPU or
+audio device, so `cargo test` works in CI and over SSH.
+
+```sh
+cargo test --locked
+```
+
+### Dynamic linking
+
+`dynamic_linking` is an opt-in Cargo feature wrapping Bevy's
+`bevy/dynamic_linking`. It links Bevy as a shared library, which speeds up
+incremental dev builds at the cost of slower startup and a non-portable binary.
+Use it for local iteration only; CI compiles it via `cargo check --all-features`.
+
+### Logging
+
+Bevy logs through `tracing`. The direct `log` dependency does not appear in the
+source: it exists only to cap the global `log` records emitted by third-party
+crates (debug and below in dev builds, warn and below in release), as explained
+in `Cargo.toml`.
 
 ## Development
 
 ```sh
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo build
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo build --locked
 ```
 
-CI runs the same checks on stable Rust (see `.github/workflows/ci.yml`).
+CI runs those checks on stable Rust plus a docs gate
+(`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`), an all-features
+check, the 1.95.0 MSRV check and `cargo-deny` (see
+`.github/workflows/ci.yml`). Dependabot proposes cargo and GitHub Actions
+updates weekly.
 
 ### Local linker configuration
 

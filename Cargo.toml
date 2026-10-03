@@ -2,6 +2,12 @@
 name = "ants"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
+description = "Real-time 2D ant colony simulation built with Bevy."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eyenalxai/ants"
+keywords = ["bevy", "simulation", "game", "ant-colony", "pheromone"]
+categories = ["games", "simulation"]
 
 [dependencies]
 bevy = { version = "0.19.1" }

@@ -1,0 +1,58 @@
+# cargo-deny configuration.
+#
+# Run locally with `cargo deny check` (https://embarkstudios.github.io/cargo-deny/);
+# CI runs the same checks through EmbarkStudios/cargo-deny-action.
+# The policy is intentionally practical for a ~550-crate Bevy dependency graph.
+
+[graph]
+# Resolve the same feature set CI builds.
+all-features = true
+# No `targets` list on purpose: every platform-specific dependency is checked,
+# so a new target-specific crate cannot sneak in unvetted licenses.
+
+[advisories]
+# RustSec advisory database (default).
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# Report yanked versions without failing the build.
+yanked = "warn"
+# Only fail on unmaintained/unsound crates that this project depends on
+# directly; transitive notices in a graph this size are not actionable here.
+unmaintained = "workspace"
+unsound = "workspace"
+ignore = []
+
+[bans]
+# Bevy's graph legitimately contains duplicate major versions (e.g.
+# windows-sys, hashbrown); report them instead of failing.
+multiple-versions = "warn"
+# Wildcard requirements show up in some older transitive crates; warn only.
+wildcards = "warn"
+
+[sources]
+# Everything must come from crates.io over HTTPS; no git or unknown registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+# Keep the default-ish confidence for license-file detection.
+confidence-threshold = 0.8
+# All licenses currently present in the dependency graph. Most crates are
+# MIT OR Apache-2.0; the rest are permissive (BSD, ISC, Zlib, Unlicense,
+# CC0, MIT-0, 0BSD, BSL-1.0) or the Unicode data license.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+exceptions = []
