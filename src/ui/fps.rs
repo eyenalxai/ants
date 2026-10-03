@@ -1,6 +1,8 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
+use crate::constants::ui::{UI_EDGE_INSET_PERCENT, UI_FONT_SIZE, UI_FPS_PANEL_PADDING};
+
 #[derive(Component)]
 pub struct FpsRoot;
 
@@ -13,11 +15,11 @@ pub fn setup_fps_counter(mut commands: Commands) {
             FpsRoot,
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Percent(1.),
-                top: Val::Percent(1.),
+                right: Val::Percent(UI_EDGE_INSET_PERCENT),
+                top: Val::Percent(UI_EDGE_INSET_PERCENT),
                 bottom: Val::Auto,
                 left: Val::Auto,
-                padding: UiRect::all(Val::Px(4.0)),
+                padding: UiRect::all(Val::Px(UI_FPS_PANEL_PADDING)),
                 ..Default::default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
@@ -30,7 +32,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
             FpsText,
             Text::new("FPS: "),
             TextFont {
-                font_size: 16.0,
+                font_size: UI_FONT_SIZE,
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -39,7 +41,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
         .with_child((
             TextSpan::new(" N/A"),
             TextFont {
-                font_size: 16.0,
+                font_size: UI_FONT_SIZE,
                 ..default()
             },
             TextColor(Color::WHITE),

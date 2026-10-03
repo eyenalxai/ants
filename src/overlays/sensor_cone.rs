@@ -1,12 +1,15 @@
-use crate::components::Ant;
-use crate::constants::*;
-use crate::resources::SelectedAnt;
 use bevy::prelude::*;
 use std::f32::consts::PI;
+
+use crate::constants::sensor::*;
+use crate::core::layers::{Z_SENSOR_CONE_LINE, Z_SENSOR_CONE_MARKER};
+use crate::overlays::SelectedAnt;
+use crate::simulation::ant::Ant;
 
 #[derive(Component)]
 pub struct SensorConeMarker;
 
+/// Draw (and per-frame respawn) the sensor cone of the selected ant.
 pub fn draw_sensor_cone(
     mut commands: Commands,
     mut selected_ant: ResMut<SelectedAnt>,
@@ -39,7 +42,7 @@ pub fn draw_sensor_cone(
                     custom_size: Some(Vec2::new(SENSOR_CONE_MARKER_SIZE, SENSOR_CONE_MARKER_SIZE)),
                     ..default()
                 },
-                Transform::from_xyz(sensor_pos.x, sensor_pos.y, 2.0),
+                Transform::from_xyz(sensor_pos.x, sensor_pos.y, Z_SENSOR_CONE_MARKER),
             ));
 
             commands.spawn((
@@ -52,7 +55,7 @@ pub fn draw_sensor_cone(
                 Transform::from_xyz(
                     ant_pos.x + (cos * SENSOR_DISTANCE / 2.0),
                     ant_pos.y + (sin * SENSOR_DISTANCE / 2.0),
-                    1.5,
+                    Z_SENSOR_CONE_LINE,
                 )
                 .with_rotation(Quat::from_rotation_z(check_angle - PI / 2.0)),
             ));
@@ -68,12 +71,12 @@ pub fn draw_sensor_cone(
                 )),
                 ..default()
             },
-            Transform::from_xyz(ant_pos.x, ant_pos.y, 2.0),
+            Transform::from_xyz(ant_pos.x, ant_pos.y, Z_SENSOR_CONE_MARKER),
         ));
     } else {
         selected_ant.entity = None;
 
-        let ants: Vec<Entity> = ant_query.iter().map(|(e, _, _)| e).collect();
+        let ants: Vec<Entity> = ant_query.iter().map(|(entity, _, _)| entity).collect();
         if !ants.is_empty() {
             let random_index = (fastrand::f32() * ants.len() as f32) as usize;
             selected_ant.entity = Some(ants[random_index]);

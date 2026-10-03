@@ -1,19 +1,38 @@
-use crate::ant_spawner::AntSpawner;
-use crate::components::{Ant, Nest};
-use crate::constants::*;
 use bevy::prelude::*;
 use std::f32::consts::PI;
+
+use crate::constants::ant::*;
+use crate::core::layers::Z_ANT;
+use crate::simulation::Nest;
+
+#[derive(Component)]
+pub struct Ant {
+    pub direction: f32,
+    pub has_food: bool,
+    pub lifetime: f32,
+    pub max_lifetime: f32,
+    pub speed: f32,
+}
+
+/// Current number of live ants, decremented when ants despawn. Used instead of
+/// a full query count for the population cap.
+#[derive(Resource, Default)]
+pub struct AntPopulation(pub usize);
+
+#[derive(Resource)]
+pub struct AntSpawner {
+    pub timer: Timer,
+    pub count: usize,
+}
 
 pub fn spawn_ants(
     mut commands: Commands,
     mut spawner: ResMut<AntSpawner>,
-    time: Res<Time>,
+    mut population: ResMut<AntPopulation>,
+    time: Res<Time<Fixed>>,
     nest_query: Query<&Transform, With<Nest>>,
-    ant_query: Query<&Ant>,
 ) {
-    let current_ant_count = ant_query.iter().count();
-
-    if current_ant_count >= MAX_ANTS {
+    if population.0 >= MAX_ANTS {
         return;
     }
 
@@ -22,7 +41,7 @@ pub fn spawn_ants(
     if spawner.timer.just_finished()
         && let Ok(nest_transform) = nest_query.single()
     {
-        let batch_size = ANT_BATCH_SIZE.min(MAX_ANTS - current_ant_count);
+        let batch_size = ANT_BATCH_SIZE.min(MAX_ANTS - population.0);
 
         for _ in 0..batch_size {
             let random_angle = fastrand::f32() * 2.0 * PI;
@@ -46,25 +65,29 @@ pub fn spawn_ants(
                 Transform::from_xyz(
                     nest_transform.translation.x,
                     nest_transform.translation.y,
-                    1.0,
+                    Z_ANT,
                 ),
             ));
 
             spawner.count += 1;
         }
+
+        population.0 += batch_size;
     }
 }
 
 pub fn update_ant_lifetime(
     mut commands: Commands,
     mut ant_query: Query<(Entity, &mut Ant)>,
-    time: Res<Time>,
+    mut population: ResMut<AntPopulation>,
+    time: Res<Time<Fixed>>,
 ) {
     for (entity, mut ant) in &mut ant_query {
         ant.lifetime -= time.delta_secs();
 
         if ant.lifetime <= 0.0 {
             commands.entity(entity).despawn();
+            population.0 = population.0.saturating_sub(1);
         }
     }
 }

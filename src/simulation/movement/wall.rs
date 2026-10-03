@@ -1,8 +1,11 @@
-use crate::components::Ant;
-use crate::constants::*;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
+use crate::constants::world::{PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH, WALL_BOUNCE_MIN_ANGLE};
+use crate::simulation::ant::Ant;
+
+/// Clamp the ant to the play area and reflect its direction, keeping the bounce
+/// angle away from the wall tangent.
 pub fn handle_wall_collision(ant: &mut Ant, transform: &mut Transform) {
     let half_width = PLAY_AREA_WIDTH / 2.0;
     let half_height = PLAY_AREA_HEIGHT / 2.0;
