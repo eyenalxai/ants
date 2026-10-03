@@ -17,13 +17,14 @@ cargo build --locked
 
 ## Structure
 
-- `src/core/` — grid, layers, system sets, RNG (shared primitives)
+- `src/core/` — grid, layers, system sets (shared primitives)
 - `src/constants/` — all tuning constants, grouped by feature
-- `src/simulation/` — ants, movement, food, density, colony, deposits
+- `src/simulation/` — ants (with per-ant deterministic RNG), movement, food, density, colony, deposits
 - `src/pheromone/` — pheromone grid and decay
 - `src/overlays/` — pheromone and sensor-cone debug rendering
 - `src/editor/` — food/nest tools and cursors
 - `src/ui/` — HUD and FPS overlay
+- `src/perf.rs` — opt-in performance counters (`ANTS_PERF=1`)
 
 Feature plugins are wired in `src/main.rs`; the simulation runs in
 `FixedUpdate` at 64 Hz.
