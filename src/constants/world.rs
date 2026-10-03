@@ -1,8 +1,18 @@
+//! World geometry and shared simulation tuning constants.
+
+/// Initial window width in pixels.
 pub const WINDOW_WIDTH: u32 = 800;
+/// Initial window height in pixels.
 pub const WINDOW_HEIGHT: u32 = 600;
 
-pub const PLAY_AREA_WIDTH: f32 = 800.0;
-pub const PLAY_AREA_HEIGHT: f32 = 600.0;
+/// Play-area width in world units, derived from [`WINDOW_WIDTH`] so the two
+/// cannot drift apart.
+///
+/// The simulation world stays fixed at this size even though the window is
+/// resizable: ant coordinates are independent of the current window size.
+pub const PLAY_AREA_WIDTH: f32 = WINDOW_WIDTH as f32;
+/// Play-area height in world units, derived from [`WINDOW_HEIGHT`].
+pub const PLAY_AREA_HEIGHT: f32 = WINDOW_HEIGHT as f32;
 
 pub const GRID_SIZE: f32 = 4.0;
 pub const GRID_WIDTH: usize = (PLAY_AREA_WIDTH / GRID_SIZE) as usize;

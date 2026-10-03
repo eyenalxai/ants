@@ -20,8 +20,3 @@ pub enum GameSet {
 /// resource mirrors that state for the pause button tint.
 #[derive(Resource, Default)]
 pub struct Paused(pub bool);
-
-/// Shared run condition for systems that must not run while paused.
-pub fn not_paused(paused: Res<Paused>) -> bool {
-    !paused.0
-}

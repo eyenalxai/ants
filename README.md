@@ -67,10 +67,15 @@ the fixed-step simulation while overlays, UI and editing keep responding.
 
 ### Randomness
 
-Every random draw (ant spawn jitter, steering noise, overlay ant selection)
-currently comes from the process-global `fastrand` generator. There is no seed
-and no simulation-owned RNG resource yet, so two runs with the same inputs are
-**not** reproducible; treat each run as an independent sample.
+Simulation behavior is seeded and reproducible. Every ant carries its own
+`AntRng` stream derived from the ant's spawn index, so steering noise, random
+turns, spawn jitter, heading and lifetime variation all come from a fixed
+per-ant sequence regardless of which executor thread steps the ant; the
+parallel `move_ants` pass cannot change the result. Food queries break
+equidistant ties by lowest cell index instead of hash order. Two runs that
+execute the same fixed-step sequence therefore produce identical ant state.
+The one remaining process-global draw is cosmetic: the F3 overlay picks its
+random ant for the sensor-cone view with the unseeded `fastrand` generator.
 
 ### Testing
 

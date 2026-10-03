@@ -145,29 +145,21 @@ fn sample_crowding(ant: &Ant, pos: Vec2, density: &AntDensity) -> (f32, f32) {
 
 /// Nearest food cell inside the short forward cone, if any.
 ///
-/// `FoodGrid::nearest_within` supplies the closest local candidate; only when
-/// that candidate is empty or outside the cone do we fall back to scanning the
-/// (small) set of local cells for the nearest in-cone one.
+/// The query is bounded to cells within [`FOOD_SENSE_RANGE`] of the ant (plus
+/// one cell of slack for the ant's offset from its cell centre); there is no
+/// global fallback scan. The nearest in-cone cell is selected directly, which
+/// is equivalent to the old "nearest overall, then nearest in-cone" two-step
+/// because a cell that is nearest overall and in cone is also nearest among
+/// the in-cone cells.
 fn sense_food(ant: &Ant, ant_pos: Vec2, food_grid: &FoodGrid) -> Option<Vec2> {
     let center = world_to_grid(ant_pos)?;
     // +1 cell covers the ant's offset from its cell centre.
     let radius_cells = (FOOD_SENSE_RANGE / GRID_SIZE).ceil() as i32 + 1;
-    let (nearest_cell, _) = food_grid.nearest_within(center, radius_cells)?;
+    let (cell, _) = food_grid.nearest_within_matching(center, radius_cells, |cell| {
+        in_cone(ant, ant_pos, cell, food_grid).is_some()
+    })?;
 
-    if let Some((food_pos, _)) = in_cone(ant, ant_pos, nearest_cell, food_grid) {
-        return Some(food_pos);
-    }
-
-    let mut best: Option<(Vec2, f32)> = None;
-    for (cell, _amount) in food_grid.iter() {
-        if let Some((food_pos, distance)) = in_cone(ant, ant_pos, cell, food_grid)
-            && best.is_none_or(|(_, best_distance)| distance < best_distance)
-        {
-            best = Some((food_pos, distance));
-        }
-    }
-
-    best.map(|(food_pos, _)| food_pos)
+    in_cone(ant, ant_pos, cell, food_grid).map(|(food_pos, _)| food_pos)
 }
 
 /// Filter one candidate cell through the pickup amount, range and forward
@@ -200,7 +192,8 @@ pub(crate) fn contact_food(ant_pos: Vec2, food_grid: &FoodGrid) -> Option<UVec2>
     let radius_cells = (FOOD_PICKUP_RADIUS / GRID_SIZE).ceil() as i32 + 1;
     let (cell, _) = food_grid.nearest_within(center, radius_cells)?;
 
-    let close_enough = ant_pos.distance(grid_to_world(cell)) <= FOOD_PICKUP_RADIUS;
+    let pickup_squared = FOOD_PICKUP_RADIUS * FOOD_PICKUP_RADIUS;
+    let close_enough = ant_pos.distance_squared(grid_to_world(cell)) <= pickup_squared;
     let has_food = food_grid.amount(cell).is_some_and(|amount| amount > 0.0);
 
     (close_enough && has_food).then_some(cell)
@@ -211,11 +204,13 @@ mod tests {
     use super::*;
     use crate::constants::world::INITIAL_FOOD_AMOUNT;
 
-    fn food_grid_with(cell: UVec2) -> FoodGrid {
+    fn food_grid_with(cells: impl IntoIterator<Item = UVec2>) -> FoodGrid {
         let mut grid = FoodGrid::default();
         let mut world = World::new();
         let mut commands = world.commands();
-        grid.set(&mut commands, cell, INITIAL_FOOD_AMOUNT);
+        for cell in cells {
+            grid.set(&mut commands, cell, INITIAL_FOOD_AMOUNT);
+        }
         grid
     }
 
@@ -223,11 +218,11 @@ mod tests {
     fn food_is_only_sensed_in_the_forward_cone() {
         let ant = Ant::test_ant(0.0);
         let ahead = world_to_grid(Vec2::new(6.0, 0.0)).expect("in bounds");
-        let grid = food_grid_with(ahead);
+        let grid = food_grid_with([ahead]);
         assert!(sense_food(&ant, Vec2::ZERO, &grid).is_some());
 
         let behind = world_to_grid(Vec2::new(-6.0, 0.0)).expect("in bounds");
-        let grid = food_grid_with(behind);
+        let grid = food_grid_with([behind]);
         assert!(sense_food(&ant, Vec2::ZERO, &grid).is_none());
     }
 
@@ -235,18 +230,45 @@ mod tests {
     fn food_is_only_sensed_within_range() {
         let ant = Ant::test_ant(0.0);
         let far = world_to_grid(Vec2::new(FOOD_SENSE_RANGE + GRID_SIZE, 0.0)).expect("in bounds");
-        let grid = food_grid_with(far);
+        let grid = food_grid_with([far]);
         assert!(sense_food(&ant, Vec2::ZERO, &grid).is_none());
+    }
+
+    #[test]
+    fn sense_food_finds_in_cone_food_behind_a_closer_out_of_cone_cell() {
+        let ant = Ant::test_ant(0.0);
+        let behind = world_to_grid(Vec2::new(-4.0, 0.0)).expect("in bounds");
+        let ahead = world_to_grid(Vec2::new(8.0, 0.0)).expect("in bounds");
+        let grid = food_grid_with([behind, ahead]);
+
+        assert_eq!(
+            sense_food(&ant, Vec2::ZERO, &grid),
+            Some(grid_to_world(ahead)),
+            "the nearer cell is outside the cone, so the in-cone cell must win"
+        );
+    }
+
+    #[test]
+    fn sense_food_prefers_the_nearest_in_cone_cell() {
+        let ant = Ant::test_ant(0.0);
+        let near = world_to_grid(Vec2::new(8.0, 0.0)).expect("in bounds");
+        let far = world_to_grid(Vec2::new(12.0, 0.0)).expect("in bounds");
+        let grid = food_grid_with([far, near]);
+
+        assert_eq!(
+            sense_food(&ant, Vec2::ZERO, &grid),
+            Some(grid_to_world(near))
+        );
     }
 
     #[test]
     fn pickup_needs_contact_and_remaining_food() {
         let contact = world_to_grid(Vec2::new(2.0, 0.0)).expect("in bounds");
-        let grid = food_grid_with(contact);
+        let grid = food_grid_with([contact]);
         assert_eq!(contact_food(Vec2::ZERO, &grid), Some(contact));
 
         let far = world_to_grid(Vec2::new(20.0, 0.0)).expect("in bounds");
-        let grid = food_grid_with(far);
+        let grid = food_grid_with([far]);
         assert_eq!(contact_food(Vec2::ZERO, &grid), None);
     }
 }

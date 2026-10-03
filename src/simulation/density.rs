@@ -4,8 +4,9 @@ use bevy::prelude::*;
 
 use crate::constants::world::{
     DENSITY_CELL_SIZE, DENSITY_CROWDED_THRESHOLD, DENSITY_GRID_HEIGHT, DENSITY_GRID_WIDTH,
-    DENSITY_SLOWDOWN_FACTOR, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH,
+    DENSITY_SLOWDOWN_FACTOR,
 };
+use crate::core::grid::world_to_index;
 use crate::simulation::ant::Ant;
 
 /// Flat per-cell ant counts, rebuilt once per fixed tick before movement.
@@ -46,14 +47,12 @@ impl AntDensity {
 
 /// Flat index of the density cell containing `world`, if inside the play area.
 pub fn density_index(world: Vec2) -> Option<usize> {
-    let x = ((world.x + PLAY_AREA_WIDTH / 2.0) / DENSITY_CELL_SIZE) as i32;
-    let y = ((world.y + PLAY_AREA_HEIGHT / 2.0) / DENSITY_CELL_SIZE) as i32;
-
-    if x < 0 || y < 0 || x >= DENSITY_GRID_WIDTH as i32 || y >= DENSITY_GRID_HEIGHT as i32 {
-        return None;
-    }
-
-    Some(y as usize * DENSITY_GRID_WIDTH + x as usize)
+    world_to_index(
+        world,
+        DENSITY_CELL_SIZE,
+        DENSITY_GRID_WIDTH,
+        DENSITY_GRID_HEIGHT,
+    )
 }
 
 /// Rebuild the density grid from all live ants in one sequential pass.
@@ -91,6 +90,7 @@ pub fn crowd_response(ahead: u32, left: u32, right: u32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::world::{PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
 
     #[test]
     fn density_index_covers_play_area() {

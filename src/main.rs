@@ -38,7 +38,14 @@ fn main() {
             editor::EditorPlugin,
             ui::UiPlugin,
         ))
-        .configure_sets(Update, (GameSet::Overlay, GameSet::Ui, GameSet::Editor))
+        // `Ui` writes `EditorMode` on button presses and the editor systems
+        // read it (cursor visibility, run conditions), so `Ui` must run before
+        // `Editor` for a press to take effect in the same frame. `Overlay` is
+        // independent and runs first.
+        .configure_sets(
+            Update,
+            (GameSet::Overlay, GameSet::Ui, GameSet::Editor).chain(),
+        )
         .configure_sets(FixedUpdate, GameSet::Sim)
         .run();
 }

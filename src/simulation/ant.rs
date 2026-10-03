@@ -6,7 +6,7 @@ use std::f32::consts::PI;
 use crate::constants::ant::*;
 use crate::constants::world::NEST_RADIUS;
 use crate::core::layers::Z_ANT;
-use crate::simulation::Nest;
+use crate::simulation::NestPosition;
 use crate::simulation::colony::ColonyStats;
 
 /// Behavioral phase of an ant.
@@ -26,6 +26,9 @@ pub enum AntPhase {
 pub struct Ant {
     pub direction: f32,
     pub has_food: bool,
+    /// Amount of food currently carried, set at pickup and cleared at
+    /// dropoff. Zero whenever `has_food` is false.
+    pub carrying: f32,
     /// Nest position when last visited, used for path integration.
     pub home: Vec2,
     pub age: f32,
@@ -84,7 +87,7 @@ impl Ant {
             return true;
         }
 
-        if self.energy < ANT_ENERGY_RETURN_THRESHOLD {
+        if self.energy < ANT_ENERGY_RETURN_THRESHOLD && self.phase == AntPhase::Foraging {
             self.phase = AntPhase::Returning;
         }
 
@@ -106,6 +109,7 @@ impl Ant {
         Self {
             direction,
             has_food: false,
+            carrying: 0.0,
             home: Vec2::ZERO,
             age: 0.0,
             max_lifetime: ANT_LIFETIME,
@@ -151,8 +155,8 @@ pub fn spawn_ants(
     mut spawner: ResMut<AntSpawner>,
     mut population: ResMut<AntPopulation>,
     colony: Res<ColonyStats>,
+    nest_position: Res<NestPosition>,
     time: Res<Time<Fixed>>,
-    nest_query: Query<&Transform, With<Nest>>,
     mut spawn_counter: Local<u64>,
 ) {
     spawner.timer.tick(time.delta());
@@ -166,11 +170,7 @@ pub fn spawn_ants(
         return;
     }
 
-    let Ok(nest_transform) = nest_query.single() else {
-        return;
-    };
-
-    let nest_pos = Vec2::new(nest_transform.translation.x, nest_transform.translation.y);
+    let nest_pos = nest_position.0;
     let ramp = (1.0 - population.0 as f32 / MAX_ANTS as f32).clamp(0.0, 1.0);
     let batch_size = ((ANT_BATCH_SIZE as f32 * ramp * colony.delivery_boost()) as usize)
         .max(1)
@@ -196,6 +196,7 @@ pub fn spawn_ants(
             Ant {
                 direction: heading,
                 has_food: false,
+                carrying: 0.0,
                 home: nest_pos,
                 age: 0.0,
                 max_lifetime,
@@ -225,21 +226,19 @@ pub fn update_ant_energy_age(
     mut commands: Commands,
     mut ant_query: Query<(Entity, &mut Ant, &Transform)>,
     mut population: ResMut<AntPopulation>,
-    nest_query: Query<&Transform, With<Nest>>,
+    nest_position: Res<NestPosition>,
     time: Res<Time<Fixed>>,
 ) {
     let dt = time.delta_secs();
-    let nest_pos = nest_query
-        .iter()
-        .next()
-        .map(|transform| Vec2::new(transform.translation.x, transform.translation.y));
+    let nest_pos = nest_position.0;
+    let nest_radius_squared = NEST_RADIUS * NEST_RADIUS;
 
     for (entity, mut ant, transform) in &mut ant_query {
         ant.tick_handling(dt);
         ant.age += dt;
 
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        let in_nest = nest_pos.is_some_and(|nest| pos.distance(nest) < NEST_RADIUS);
+        let in_nest = pos.distance_squared(nest_pos) < nest_radius_squared;
 
         if ant.age >= ant.max_lifetime || ant.tick_energy(dt, in_nest) {
             commands.entity(entity).despawn();
@@ -247,10 +246,8 @@ pub fn update_ant_energy_age(
             continue;
         }
 
-        if let Some(nest) = nest_pos
-            && in_nest
-        {
-            ant.home = nest;
+        if in_nest {
+            ant.home = nest_pos;
         }
 
         if ant.phase == AntPhase::Nursing && ant.nursing_over() {
@@ -303,6 +300,20 @@ mod tests {
             }
         }
         assert!(starved);
+    }
+
+    #[test]
+    fn nursing_ants_are_not_demoted_by_low_energy() {
+        let mut ant = Ant::test_ant(0.0);
+        ant.phase = AntPhase::Nursing;
+        ant.energy = ANT_ENERGY_RETURN_THRESHOLD * 0.5;
+
+        assert!(!ant.tick_energy(1.0, false));
+        assert_eq!(
+            ant.phase,
+            AntPhase::Nursing,
+            "energy must not pull a nurse out of the nursing phase"
+        );
     }
 
     #[test]

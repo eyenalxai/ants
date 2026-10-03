@@ -25,22 +25,41 @@ use ant::{AntPopulation, AntSpawner};
 #[derive(Component)]
 pub struct Nest;
 
-/// Marker for the static play-area walls.
-#[derive(Component)]
-pub struct Wall;
+/// World-space nest centre, kept in sync with the [`Nest`] transform by
+/// [`sync_nest_position`] at the start of every fixed step. Systems read this
+/// instead of querying the nest entity directly.
+#[derive(Resource, Default)]
+pub struct NestPosition(pub Vec2);
+
+/// Copy the nest transform into [`NestPosition`]. A missing nest leaves the
+/// last known position in place.
+fn sync_nest_position(
+    nest_query: Query<&Transform, With<Nest>>,
+    mut nest_position: ResMut<NestPosition>,
+) {
+    if let Ok(transform) = nest_query.single() {
+        nest_position.0 = Vec2::new(transform.translation.x, transform.translation.y);
+    }
+}
 
 /// Owns the simulation resources, startup spawns and the fixed-step chain.
 pub struct SimulationPlugin;
 
 impl SimulationPlugin {
     /// Register the explicit fixed-step chain:
-    /// density -> lifetime/energy -> spawn -> collide -> move -> deposit ->
-    /// food depletion. The deposit system itself lives in the pheromone plugin;
-    /// ordering edges are attached here instead.
+    /// nest sync -> density -> lifetime/energy -> spawn -> collide -> move ->
+    /// deposit -> food depletion. The deposit system itself lives in the
+    /// pheromone plugin; ordering edges are attached here instead.
+    ///
+    /// Also initializes the resources the chain reads, because headless tests
+    /// call this without [`SimulationPlugin::build`].
     pub(crate) fn add_fixed_step_systems(app: &mut App) {
+        app.init_resource::<NestPosition>();
+
         app.add_systems(
             FixedUpdate,
             (
+                sync_nest_position,
                 density::rebuild_ant_density,
                 ant::update_ant_energy_age,
                 ant::spawn_ants,
@@ -90,7 +109,6 @@ fn spawn_world(
     let half_height = PLAY_AREA_HEIGHT / 2.0;
 
     commands.spawn((
-        Wall,
         Sprite {
             color: wall_color,
             custom_size: Some(Vec2::new(
@@ -103,7 +121,6 @@ fn spawn_world(
     ));
 
     commands.spawn((
-        Wall,
         Sprite {
             color: wall_color,
             custom_size: Some(Vec2::new(
@@ -116,7 +133,6 @@ fn spawn_world(
     ));
 
     commands.spawn((
-        Wall,
         Sprite {
             color: wall_color,
             custom_size: Some(Vec2::new(WALL_THICKNESS, PLAY_AREA_HEIGHT)),
@@ -126,7 +142,6 @@ fn spawn_world(
     ));
 
     commands.spawn((
-        Wall,
         Sprite {
             color: wall_color,
             custom_size: Some(Vec2::new(WALL_THICKNESS, PLAY_AREA_HEIGHT)),
