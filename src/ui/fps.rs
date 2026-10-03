@@ -1,3 +1,5 @@
+//! Frame-rate counter panel and its update system.
+
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
@@ -12,6 +14,10 @@ pub struct FpsRoot;
 
 #[derive(Component)]
 pub struct FpsText;
+
+/// Marks the numeric span that [`fps_text_update_system`] writes to.
+#[derive(Component)]
+pub struct FpsValue;
 
 pub fn setup_fps_counter(mut commands: Commands) {
     let root = widgets::spawn_panel(
@@ -40,6 +46,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
             Node::default(),
         ))
         .with_child((
+            FpsValue,
             TextSpan::new(" N/A"),
             TextFont {
                 font_size: FontSize::Px(UI_FONT_SIZE),
@@ -54,7 +61,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
 
 pub fn fps_text_update_system(
     diagnostics: Res<DiagnosticsStore>,
-    mut span_query: Query<(&mut TextSpan, &mut TextColor), Without<FpsText>>,
+    mut span_query: Query<(&mut TextSpan, &mut TextColor), With<FpsValue>>,
 ) {
     if let Some(value) = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)

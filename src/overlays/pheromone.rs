@@ -5,7 +5,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::constants::pheromone::{PHEROMONE_MAX_INTENSITY, PHEROMONE_VISUAL_ALPHA};
+use crate::constants::pheromone::{PHEROMONE_VISUAL_ALPHA, PHEROMONE_VISUAL_SCALE};
 use crate::constants::world::{GRID_HEIGHT, GRID_WIDTH, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
 use crate::core::layers::Z_PHEROMONE;
 use crate::overlays::PheromoneDisplayState;
@@ -132,16 +132,23 @@ pub fn update_pheromone_visuals(
     overlay.uploaded_version = pheromone_grid.version();
 }
 
+/// Compressive visual normalization shared by the overlay and the sensor-cone
+/// markers: `v = sqrt((raw / PHEROMONE_VISUAL_SCALE).clamp(0, 1))`.
+///
+/// The square root lifts operational readings (one ant pass is a small
+/// fraction of [`PHEROMONE_VISUAL_SCALE`]) into visible byte values while the
+/// clamp saturates busy trails without wrapping.
+pub(crate) fn normalized_visual(raw: f32) -> f32 {
+    (raw / PHEROMONE_VISUAL_SCALE).clamp(0.0, 1.0).sqrt()
+}
+
 /// RGBA bytes for one cell: red is `to_food`, blue is `to_nest`, alpha scales
-/// with the combined intensity.
+/// with the combined normalized intensity (capped at 0.9 before the visual
+/// alpha multiplier so overlapping channels stay translucent).
 fn cell_pixel(pheromone: &Pheromone) -> [u8; 4] {
-    let to_food = (pheromone.to_food / PHEROMONE_MAX_INTENSITY).clamp(0.0, 1.0);
-    let to_nest = (pheromone.to_nest / PHEROMONE_MAX_INTENSITY).clamp(0.0, 1.0);
-    let alpha = ((pheromone.to_food.min(PHEROMONE_MAX_INTENSITY)
-        + pheromone.to_nest.min(PHEROMONE_MAX_INTENSITY))
-        / PHEROMONE_MAX_INTENSITY)
-        .clamp(0.0, 1.0)
-        * PHEROMONE_VISUAL_ALPHA;
+    let to_food = normalized_visual(pheromone.to_food);
+    let to_nest = normalized_visual(pheromone.to_nest);
+    let alpha = (to_food + to_nest).min(0.9) * PHEROMONE_VISUAL_ALPHA;
 
     [
         (to_food * 255.0).round() as u8,
@@ -154,29 +161,123 @@ fn cell_pixel(pheromone: &Pheromone) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Byte alpha of a single fully saturated channel:
+    /// `min(0.9, 1.0) * PHEROMONE_VISUAL_ALPHA * 255`, rounded.
+    const FULL_ALPHA_BYTE: u8 = 115;
+
+    #[test]
+    fn visual_normalization_is_compressive_and_saturating() {
+        assert_eq!(normalized_visual(0.0), 0.0);
+        assert_eq!(normalized_visual(-1.0), 0.0);
+        assert_eq!(normalized_visual(PHEROMONE_VISUAL_SCALE), 1.0);
+        assert_eq!(normalized_visual(PHEROMONE_VISUAL_SCALE * 10.0), 1.0);
+
+        let quarter = normalized_visual(PHEROMONE_VISUAL_SCALE * 0.25);
+        assert!(
+            (quarter - 0.5).abs() < 1e-6,
+            "sqrt should lift mid-range readings"
+        );
+    }
 
     #[test]
     fn pixel_color_maps_channels_with_shared_alpha() {
         let food_only = cell_pixel(&Pheromone {
-            to_food: PHEROMONE_MAX_INTENSITY,
+            to_food: PHEROMONE_VISUAL_SCALE,
             to_nest: 0.0,
         });
 
-        assert_eq!(food_only[0], u8::MAX);
-        assert_eq!(food_only[2], 0);
-        assert_eq!(food_only[3], (PHEROMONE_VISUAL_ALPHA * 255.0).round() as u8);
+        assert_eq!(food_only, [u8::MAX, 0, 0, FULL_ALPHA_BYTE]);
 
         let saturated = cell_pixel(&Pheromone {
-            to_food: PHEROMONE_MAX_INTENSITY,
-            to_nest: PHEROMONE_MAX_INTENSITY,
+            to_food: PHEROMONE_VISUAL_SCALE,
+            to_nest: PHEROMONE_VISUAL_SCALE,
         });
 
         assert_eq!(saturated[0], u8::MAX);
         assert_eq!(saturated[2], u8::MAX);
-        assert_eq!(saturated[3], food_only[3]);
+        assert_eq!(saturated[3], FULL_ALPHA_BYTE);
 
         let empty = cell_pixel(&Pheromone::default());
 
         assert_eq!(empty, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn operational_trail_values_are_clearly_visible() {
+        // Half of the visual scale: sqrt(0.25) = 0.5 -> 128 red, 64 alpha.
+        let half = cell_pixel(&Pheromone {
+            to_food: PHEROMONE_VISUAL_SCALE / 4.0,
+            to_nest: 0.0,
+        });
+        assert_eq!(half, [128, 0, 0, 64]);
+
+        // A busy trail (raw ~20) must be unmistakably visible instead of the
+        // 1-2 byte alpha the old storage-scale mapping produced.
+        let busy = cell_pixel(&Pheromone {
+            to_food: PHEROMONE_VISUAL_SCALE,
+            to_nest: 0.0,
+        });
+        assert!(busy[3] >= 96, "busy trail alpha was {}", busy[3]);
+    }
+
+    #[test]
+    fn overlay_uploads_cell_pixels_and_hides_when_disabled() {
+        let mut world = World::new();
+        world.insert_resource(Assets::<Image>::default());
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(PheromoneDisplayState { enabled: true });
+        world.init_resource::<PheromoneGrid>();
+
+        let cell = UVec2::new(3, 5);
+        world
+            .resource_mut::<PheromoneGrid>()
+            .add(cell, PHEROMONE_VISUAL_SCALE, 0.0);
+
+        world.run_system_once(setup_pheromone_overlay).unwrap();
+        world.run_system_once(update_pheromone_visuals).unwrap();
+
+        let (overlay_entity, image_handle) = {
+            let mut query = world.query::<(Entity, &PheromoneOverlay)>();
+            let (entity, overlay) = query.single(&world).expect("one overlay sprite");
+            (entity, overlay.image.clone())
+        };
+        assert_eq!(
+            *world.get::<Visibility>(overlay_entity).unwrap(),
+            Visibility::Visible
+        );
+
+        // Texture rows run top-down, grid rows bottom-up.
+        let flat = (GRID_HEIGHT - 1 - cell.y as usize) * GRID_WIDTH * 4 + cell.x as usize * 4;
+        let expected = cell_pixel(&Pheromone {
+            to_food: PHEROMONE_VISUAL_SCALE,
+            to_nest: 0.0,
+        });
+        let uploaded = {
+            let images = world.resource::<Assets<Image>>();
+            let data = images
+                .get(&image_handle)
+                .and_then(|image| image.data.as_ref())
+                .expect("overlay image data");
+            data[flat..flat + 4].to_vec()
+        };
+        assert_eq!(uploaded, expected);
+
+        // Turning the overlay off hides the sprite and leaves the texture
+        // untouched.
+        world.resource_mut::<PheromoneDisplayState>().enabled = false;
+        world.run_system_once(update_pheromone_visuals).unwrap();
+
+        assert_eq!(
+            *world.get::<Visibility>(overlay_entity).unwrap(),
+            Visibility::Hidden
+        );
+        let images = world.resource::<Assets<Image>>();
+        let data = images
+            .get(&image_handle)
+            .and_then(|image| image.data.as_ref())
+            .expect("overlay image data");
+        assert_eq!(&data[flat..flat + 4], uploaded.as_slice());
     }
 }

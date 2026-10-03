@@ -48,6 +48,7 @@ impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EditorMode>()
             .init_resource::<nest::NestDrag>()
+            .add_message::<nest::NestMoved>()
             .add_systems(Startup, cursor::setup_cursors)
             .add_systems(
                 Update,
@@ -56,6 +57,7 @@ impl Plugin for EditorPlugin {
                     cursor::update_nest_cursor,
                     food::handle_food_clicks.run_if(in_food_mode),
                     nest::handle_nest_drag.run_if(in_nest_mode),
+                    nest::apply_nest_move,
                     nest::cancel_nest_drag_on_mode_exit.run_if(resource_changed::<EditorMode>),
                 )
                     .chain()

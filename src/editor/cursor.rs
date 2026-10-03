@@ -1,5 +1,6 @@
 //! Persistent tool cursors and shared pointer helpers for the editor systems.
 
+use bevy::log::warn_once;
 use bevy::prelude::*;
 
 use crate::constants::ui::{
@@ -10,7 +11,7 @@ use crate::constants::world::GRID_SIZE;
 use crate::core::grid::{grid_to_world, world_to_grid};
 use crate::core::layers::Z_CURSOR;
 use crate::editor::food::brush_center_offset;
-use crate::editor::nest::NestDrag;
+use crate::editor::nest::{NestDrag, clamp_nest_position};
 use crate::editor::{EditorMode, EditorModeKind};
 
 /// The persistent food paint cursor entity.
@@ -20,6 +21,22 @@ pub struct FoodCursor;
 /// The persistent nest drag cursor entity.
 #[derive(Component)]
 pub struct NestCursor;
+
+/// Write access to the food cursor entity.
+type FoodCursorQuery<'w, 's> =
+    Single<'w, 's, (&'static mut Transform, &'static mut Visibility), With<FoodCursor>>;
+
+/// Write access to the nest cursor entity.
+type NestCursorQuery<'w, 's> = Single<
+    'w,
+    's,
+    (
+        &'static mut Transform,
+        &'static mut Sprite,
+        &'static mut Visibility,
+    ),
+    With<NestCursor>,
+>;
 
 /// True while any UI widget (panel or button) is hovered or pressed.
 pub fn pointer_over_ui(ui_query: &Query<&Interaction>) -> bool {
@@ -77,10 +94,15 @@ pub fn setup_cursors(mut commands: Commands) {
 pub fn update_food_cursor(
     mode: Res<EditorMode>,
     ui_query: Query<&Interaction>,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    cursor: Single<(&mut Transform, &mut Visibility), With<FoodCursor>>,
+    window: Option<Single<&Window>>,
+    camera: Option<Single<(&Camera, &GlobalTransform)>>,
+    cursor: Option<FoodCursorQuery>,
 ) {
+    let (Some(window), Some(camera), Some(cursor)) = (window, camera, cursor) else {
+        warn_once!("food cursor not updated: window, camera or cursor entity is missing");
+        return;
+    };
+
     let (mut transform, mut visibility) = cursor.into_inner();
     let (camera, camera_transform) = camera.into_inner();
 
@@ -109,10 +131,15 @@ pub fn update_nest_cursor(
     mode: Res<EditorMode>,
     drag: Res<NestDrag>,
     ui_query: Query<&Interaction>,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    cursor: Single<(&mut Transform, &mut Sprite, &mut Visibility), With<NestCursor>>,
+    window: Option<Single<&Window>>,
+    camera: Option<Single<(&Camera, &GlobalTransform)>>,
+    cursor: Option<NestCursorQuery>,
 ) {
+    let (Some(window), Some(camera), Some(cursor)) = (window, camera, cursor) else {
+        warn_once!("nest cursor not updated: window, camera or cursor entity is missing");
+        return;
+    };
+
     let (mut transform, mut sprite, mut visibility) = cursor.into_inner();
     let (camera, camera_transform) = camera.into_inner();
 
@@ -127,8 +154,11 @@ pub fn update_nest_cursor(
         return;
     };
 
-    transform.translation.x = world_pos.x;
-    transform.translation.y = world_pos.y;
+    // Preview where the clamped nest would land.
+    let position = clamp_nest_position(world_pos);
+
+    transform.translation.x = position.x;
+    transform.translation.y = position.y;
     sprite.color = if drag.dragging {
         NEST_CURSOR_DRAG_COLOR
     } else {
@@ -140,6 +170,19 @@ pub fn update_nest_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn cursor_systems_run_without_a_window_camera_or_cursor() {
+        // F15: with `Option<Single<...>>` the systems must run and no-op
+        // instead of failing parameter validation and stalling silently.
+        let mut world = World::new();
+        world.init_resource::<EditorMode>();
+        world.insert_resource(NestDrag::default());
+
+        world.run_system_once(update_food_cursor).unwrap();
+        world.run_system_once(update_nest_cursor).unwrap();
+    }
 
     #[test]
     fn interaction_state_detection() {

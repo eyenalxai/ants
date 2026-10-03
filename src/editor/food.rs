@@ -1,3 +1,4 @@
+use bevy::log::warn_once;
 use bevy::prelude::*;
 
 use crate::constants::ui::FOOD_BRUSH_DIAMETER;
@@ -29,12 +30,17 @@ pub fn handle_food_clicks(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut food_grid: ResMut<FoodGrid>,
     ui_query: Query<&Interaction>,
-    window: Single<&Window>,
-    camera: Single<(&Camera, &GlobalTransform)>,
+    window: Option<Single<&Window>>,
+    camera: Option<Single<(&Camera, &GlobalTransform)>>,
 ) {
     if pointer_over_ui(&ui_query) {
         return;
     }
+
+    let (Some(window), Some(camera)) = (window, camera) else {
+        warn_once!("food clicks ignored: window or camera is unavailable");
+        return;
+    };
 
     let (camera, camera_transform) = camera.into_inner();
     let Some(world_pos) = cursor_world_pos(window.into_inner(), camera, camera_transform) else {
