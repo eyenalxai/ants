@@ -114,16 +114,25 @@ pub(crate) fn register_sim_resources(app: &mut App) {
 }
 
 impl SimulationPlugin {
-    /// Register the simulation resources and the fixed-step chain.
+    /// Register the simulation resources, the stream wiring and the fixed-step
+    /// chain.
     ///
     /// [`SimSet`] declares the order once — `Clock -> NestSync -> Density ->
     /// Lifecycle -> Spawn -> Collide -> Delivery -> Move -> Deposit -> Decay ->
     /// Deplete -> Visuals` — and every system is placed in its set where it is
     /// registered, so no cross-plugin ordering edges exist. Headless tests
     /// call this without [`SimulationPlugin::build`], which is why it also
-    /// initializes the resources via [`register_sim_resources`].
+    /// initializes the resources via [`register_sim_resources`] and wires the
+    /// environment clock, nest geometry and lifecycle/task-pool systems.
+    /// Registering a stream hook here means it runs in every harness too.
     pub(crate) fn add_fixed_step_systems(app: &mut App) {
         register_sim_resources(app);
+
+        // Stream hooks that belong to the simulation chain. They must be
+        // registered exactly once, so `build` leaves them to this method.
+        lifecycle::register(app);
+        environment::register(app);
+        nest::register(app);
 
         app.configure_sets(
             FixedUpdate,
@@ -180,9 +189,6 @@ fn capture_prev_positions(mut ant_query: Query<(&mut Ant, &Transform)>) {
 impl Plugin for SimulationPlugin {
     fn build(&self, app: &mut App) {
         register_sim_resources(app);
-        lifecycle::register(app);
-        environment::register(app);
-        nest::register(app);
 
         let hz = app
             .world()

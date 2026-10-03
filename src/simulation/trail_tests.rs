@@ -1,7 +1,8 @@
 //! Headless trail-formation tests and the calibration harness they grew from.
 //!
-//! The simulation runs the real fixed-step plugin chain (movement, collision,
-//! deposit, decay) with `MinimalPlugins`. Determinism comes from two places:
+//! The simulation runs the real fixed-step plugin chain (clock, nest geometry,
+//! lifecycle, movement, collision, deposit, decay) with `MinimalPlugins`.
+//! Determinism comes from two places:
 //! every ant owns a seeded [`crate::simulation::ant::AntRng`] and the food grid
 //! iterates in a stable order, so a run does not depend on executor threads or
 //! hash-map randomization.
@@ -42,9 +43,10 @@ const TEST_POPULATION_CAP: usize = 800;
 const TRAIL_CHECK_SECS: u32 = 45;
 /// Seconds of fixed steps compared by [`deterministic_replay_is_bit_identical`].
 const REPLAY_SECS: u32 = 15;
-/// Corridor `ToFood` average required to call it a trail (measured ~0.125).
+/// Corridor `ToFood` average required to call it a trail (full chain measured
+/// ~1.27 after [`TRAIL_CHECK_SECS`]).
 const MIN_CORRIDOR_TO_FOOD: f32 = 0.05;
-/// Deliveries required by [`TRAIL_CHECK_SECS`] (measured ~51).
+/// Deliveries required by [`TRAIL_CHECK_SECS`] (full chain measured ~65).
 const MIN_DELIVERIES: f32 = 10.0;
 
 /// Where [`build_app`] puts the food patch.
@@ -108,7 +110,7 @@ pub fn run_seconds(app: &mut App, seconds: u32, population_cap: Option<usize>) {
         app.update();
 
         if let Some(cap) = population_cap
-            && app.world().resource::<AntPopulation>().0 >= cap
+            && app.world().resource::<AntPopulation>().count() >= cap
         {
             app.world_mut()
                 .resource_mut::<AntSpawner>()
@@ -366,7 +368,7 @@ fn measure_trails() {
         }
 
         let (laden, foragers, total) = ants_near_corridor(app.world_mut());
-        let population = app.world().resource::<AntPopulation>().0;
+        let population = app.world().resource::<AntPopulation>().count();
         let remaining = food_remaining(app.world_mut());
         let grid = app.world().resource::<PheromoneGrid>();
         let corridor_food = corridor_avg(grid, PheromoneKind::ToFood, NEST_Y, food_x);

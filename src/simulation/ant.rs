@@ -271,13 +271,11 @@ impl Ant {
 
 /// Current number of live ants, decremented when ants despawn.
 ///
-/// Reads go through [`Self::count`], mutations through [`Self::add`] and
-/// [`Self::remove`]. The tuple field is still public only because the frozen
-/// `simulation::trail_tests` harness reads `.0` in two places; the integration
-/// stream should switch those reads to `count()` and then make the field
-/// private.
+/// The count is private: reads go through [`Self::count`], mutations through
+/// [`Self::add`] and [`Self::remove`], so the population resource cannot be
+/// corrupted from outside this module.
 #[derive(Resource, Default)]
-pub struct AntPopulation(pub usize);
+pub struct AntPopulation(usize);
 
 impl AntPopulation {
     /// Number of live ants.
@@ -494,6 +492,10 @@ pub fn update_ant_energy_age(
         // anchor must not be reset by crossing the nest disc.
         if in_nest && !ant.carrying_corpse {
             ant.home = nest_pos;
+            // The nest resets accumulated path-integration error (F3). The
+            // fixed per-ant `pi_bias` deliberately survives: only the drift
+            // since the last nest visit is cancelled.
+            ant.pi_drift = 0.0;
         }
 
         if ant.phase == AntPhase::Nursing && ant.nursing_over() {
@@ -965,6 +967,65 @@ mod tests {
             "two nurses for one tick should drain {} food, store is {}",
             2.0 * NURSE_UPKEEP_PER_ANT * (1.0 / 64.0),
             store.food()
+        );
+    }
+
+    /// F3: returning to the nest cancels the accumulated path-integration
+    /// drift and refreshes the home anchor, while the fixed individual
+    /// `pi_bias` survives. An ant outside the nest disc keeps its drift.
+    #[test]
+    fn nest_visit_resets_pi_drift_but_keeps_the_fixed_bias() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Time::<Fixed>::from_hz(64.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+                1.0 / 64.0,
+            )))
+            .insert_resource(NestPosition(Vec2::ZERO))
+            .init_resource::<AntPopulation>()
+            .init_resource::<ColonyStats>()
+            .insert_resource(NestStore::with_food(1.0))
+            .add_systems(FixedUpdate, update_ant_energy_age);
+
+        let mut inside = Ant::test_ant(0.0);
+        inside.phase = AntPhase::Nursing;
+        inside.home = Vec2::new(50.0, 0.0);
+        inside.pi_bias = -0.1;
+        inside.pi_drift = 0.4;
+        let inside_id = app
+            .world_mut()
+            .spawn((inside, Transform::from_xyz(NEST_RADIUS * 0.5, 0.0, 0.0)))
+            .id();
+
+        let mut outside = Ant::test_ant(0.0);
+        outside.phase = AntPhase::Nursing;
+        outside.pi_drift = -0.5;
+        let outside_id = app
+            .world_mut()
+            .spawn((outside, Transform::from_xyz(NEST_RADIUS * 3.0, 0.0, 0.0)))
+            .id();
+
+        // The first frame only primes the virtual clock; the fixed step runs
+        // on the second update.
+        app.update();
+        app.update();
+
+        let inside = app.world().get::<Ant>(inside_id).unwrap();
+        assert_eq!(inside.pi_drift, 0.0, "the nest must cancel the drift");
+        assert_eq!(
+            inside.pi_bias, -0.1,
+            "the fixed individual bias must survive"
+        );
+        assert_eq!(
+            inside.home,
+            Vec2::ZERO,
+            "the home anchor is refreshed at the nest"
+        );
+
+        let outside = app.world().get::<Ant>(outside_id).unwrap();
+        assert_eq!(
+            outside.pi_drift, -0.5,
+            "drift outside the nest must be left untouched"
         );
     }
 
