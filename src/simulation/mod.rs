@@ -47,14 +47,18 @@ pub struct SimulationPlugin;
 
 impl SimulationPlugin {
     /// Register the explicit fixed-step chain:
-    /// nest sync -> density -> lifetime/energy -> spawn -> collide -> move ->
-    /// deposit -> food depletion. The deposit system itself lives in the
-    /// pheromone plugin; ordering edges are attached here instead.
+    /// nest sync -> density -> lifetime/energy -> spawn -> collide ->
+    /// delivery EMA -> move -> deposit -> food depletion. The deposit system
+    /// itself lives in the pheromone plugin; ordering edges are attached here
+    /// instead.
     ///
     /// Also initializes the resources the chain reads, because headless tests
     /// call this without [`SimulationPlugin::build`].
     pub(crate) fn add_fixed_step_systems(app: &mut App) {
         app.init_resource::<NestPosition>();
+        // Defaults to the bootstrap amount, so headless harnesses get the same
+        // starting economy as the game without extra setup.
+        app.init_resource::<colony::NestStore>();
 
         app.add_systems(
             FixedUpdate,
@@ -64,6 +68,9 @@ impl SimulationPlugin {
                 ant::update_ant_energy_age,
                 ant::spawn_ants,
                 collide::check_collisions,
+                // Advance the delivery-rate estimate after this tick's
+                // arrivals were recorded; the next spawn batch reads it.
+                colony::tick_delivery_ema,
                 movement::move_ants.before(deposit::deposit_pheromones),
                 food::deplete_food.after(deposit::deposit_pheromones),
                 food::update_food_visuals,
@@ -79,11 +86,19 @@ impl Plugin for SimulationPlugin {
         app.init_resource::<food::FoodGrid>()
             .init_resource::<AntPopulation>()
             .init_resource::<colony::ColonyStats>()
+            .init_resource::<colony::NestStore>()
             .init_resource::<density::AntDensity>()
             .insert_resource(AntSpawner {
                 timer: Timer::from_seconds(ANT_SPAWN_INTERVAL, TimerMode::Repeating),
             })
-            .add_systems(Startup, (setup_camera, spawn_world, food::setup_food_patch));
+            .add_systems(Startup, (setup_camera, spawn_world, food::setup_food_patch))
+            // The colony stats panel lives in `ui/hud.rs`; registering its
+            // updater here keeps `ui/mod.rs` untouched. The system no-ops
+            // until `setup_hud` has spawned the text entity.
+            .add_systems(
+                Update,
+                crate::ui::hud::update_colony_stats_hud.in_set(GameSet::Ui),
+            );
 
         Self::add_fixed_step_systems(app);
     }

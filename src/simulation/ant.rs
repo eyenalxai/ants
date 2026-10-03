@@ -1,13 +1,18 @@
 //! Ant component, population bookkeeping and the energy/age lifecycle.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
 use crate::constants::ant::*;
+use crate::constants::colony::{
+    ENERGY_FULL_EPS, ENERGY_REFILL_COST, ENERGY_REFILL_RATE, NURSE_UPKEEP_PER_ANT,
+    RECRUIT_THRESHOLD,
+};
 use crate::constants::world::NEST_RADIUS;
 use crate::core::layers::Z_ANT;
 use crate::simulation::NestPosition;
-use crate::simulation::colony::ColonyStats;
+use crate::simulation::colony::{ColonyStats, NestStore};
 
 /// Behavioral phase of an ant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -65,14 +70,29 @@ impl Ant {
 
     /// Drain (or refill) energy. Returns `true` when the ant starves.
     ///
-    /// Inside the nest the tank refills instantly and a low-energy return is
-    /// considered complete.
-    pub fn tick_energy(&mut self, dt: f32, in_nest: bool) -> bool {
-        if in_nest {
-            self.energy = 1.0;
-            if self.phase == AntPhase::Returning {
-                self.phase = AntPhase::Foraging;
+    /// Inside the nest the ant refills at [`ENERGY_REFILL_RATE`] while `store`
+    /// holds food, paying [`ENERGY_REFILL_COST`] food per energy unit. The
+    /// refill is a per-second rate, so behavior is tick-rate independent.
+    /// With an empty store an ant in the nest drains like anywhere else and
+    /// can starve. An [`AntPhase::Returning`] ant is considered home once its
+    /// tank is full.
+    pub fn tick_energy(&mut self, dt: f32, in_nest: bool, store: &mut NestStore) -> bool {
+        if in_nest && store.food > 0.0 {
+            let deficit = (1.0 - self.energy).max(0.0);
+
+            if deficit > 0.0 {
+                let requested = (ENERGY_REFILL_RATE * dt).min(deficit);
+                let spent = store.spend(requested * ENERGY_REFILL_COST);
+                self.energy = (self.energy + spent / ENERGY_REFILL_COST).min(1.0);
             }
+
+            if self.energy >= 1.0 - ENERGY_FULL_EPS {
+                self.energy = 1.0;
+                if self.phase == AntPhase::Returning {
+                    self.phase = AntPhase::Foraging;
+                }
+            }
+
             return false;
         }
 
@@ -148,14 +168,37 @@ pub struct AntSpawner {
     pub timer: Timer,
 }
 
+/// Batch size for one spawn interval: the population ramp and delivery boost
+/// scaled by the store gate `clamp(store / RECRUIT_THRESHOLD, 0, 1)`, clamped
+/// to the remaining capacity. There is deliberately no `.max(1)` floor: with
+/// an empty store the colony stops recruiting and the population shrinks.
+pub fn recruitment_batch(
+    ramp: f32,
+    delivery_boost: f32,
+    store_food: f32,
+    capacity: usize,
+) -> usize {
+    let gate = (store_food / RECRUIT_THRESHOLD).clamp(0.0, 1.0);
+    ((ANT_BATCH_SIZE as f32 * ramp * delivery_boost * gate) as usize).min(capacity)
+}
+
+/// Read-only world inputs of the spawn ramp, bundled to keep the system
+/// signature small.
+#[derive(SystemParam)]
+pub struct SpawnInputs<'w> {
+    colony: Res<'w, ColonyStats>,
+    nest_store: Res<'w, NestStore>,
+    nest_position: Res<'w, NestPosition>,
+}
+
 /// Spawn new nurses at a ramped rate: slower near the population cap, faster
-/// after recent food deliveries. [`MAX_ANTS`] stays a hard safety cap.
+/// after recent food deliveries, and only while the nest store can pay for
+/// them. [`MAX_ANTS`] stays a hard safety cap.
 pub fn spawn_ants(
     mut commands: Commands,
     mut spawner: ResMut<AntSpawner>,
     mut population: ResMut<AntPopulation>,
-    colony: Res<ColonyStats>,
-    nest_position: Res<NestPosition>,
+    inputs: SpawnInputs,
     time: Res<Time<Fixed>>,
     mut spawn_counter: Local<u64>,
 ) {
@@ -170,11 +213,14 @@ pub fn spawn_ants(
         return;
     }
 
-    let nest_pos = nest_position.0;
+    let nest_pos = inputs.nest_position.0;
     let ramp = (1.0 - population.0 as f32 / MAX_ANTS as f32).clamp(0.0, 1.0);
-    let batch_size = ((ANT_BATCH_SIZE as f32 * ramp * colony.delivery_boost()) as usize)
-        .max(1)
-        .min(capacity);
+    let batch_size = recruitment_batch(
+        ramp,
+        inputs.colony.delivery_boost(),
+        inputs.nest_store.food,
+        capacity,
+    );
 
     for _ in 0..batch_size {
         let spawn_index = spawn_counter.wrapping_add(1);
@@ -222,16 +268,22 @@ pub fn spawn_ants(
 
 /// Advance age, handling pauses and energy; despawn ants that die of old age
 /// or exhaustion, and refresh the home vector inside the nest.
+///
+/// Also drains the colony's nursing upkeep: every nursing ant consumes
+/// [`NURSE_UPKEEP_PER_ANT`] food per second from the store, so a colony
+/// without income shrinks even before its foragers starve.
 pub fn update_ant_energy_age(
     mut commands: Commands,
     mut ant_query: Query<(Entity, &mut Ant, &Transform)>,
     mut population: ResMut<AntPopulation>,
+    mut nest_store: ResMut<NestStore>,
     nest_position: Res<NestPosition>,
     time: Res<Time<Fixed>>,
 ) {
     let dt = time.delta_secs();
     let nest_pos = nest_position.0;
     let nest_radius_squared = NEST_RADIUS * NEST_RADIUS;
+    let mut nurses: u32 = 0;
 
     for (entity, mut ant, transform) in &mut ant_query {
         ant.tick_handling(dt);
@@ -240,10 +292,14 @@ pub fn update_ant_energy_age(
         let pos = Vec2::new(transform.translation.x, transform.translation.y);
         let in_nest = pos.distance_squared(nest_pos) < nest_radius_squared;
 
-        if ant.age >= ant.max_lifetime || ant.tick_energy(dt, in_nest) {
+        if ant.age >= ant.max_lifetime || ant.tick_energy(dt, in_nest, &mut nest_store) {
             commands.entity(entity).despawn();
             population.0 = population.0.saturating_sub(1);
             continue;
+        }
+
+        if ant.phase == AntPhase::Nursing {
+            nurses += 1;
         }
 
         if in_nest {
@@ -254,11 +310,18 @@ pub fn update_ant_energy_age(
             ant.phase = AntPhase::Foraging;
         }
     }
+
+    if nurses > 0 {
+        nest_store.spend(NURSE_UPKEEP_PER_ANT * nurses as f32 * dt);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::colony::NEST_STORE_CAP;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
 
     const EPS: f32 = 1e-6;
 
@@ -281,11 +344,12 @@ mod tests {
     #[test]
     fn energy_drain_forces_returning_then_starvation() {
         let mut ant = Ant::test_ant(0.0);
+        let mut store = NestStore { food: 0.0 };
         let dt = 1.0 / 64.0;
 
         let mut ticks = 0;
         while ant.phase != AntPhase::Returning && ticks < 64 * 120 {
-            assert!(!ant.tick_energy(dt, false));
+            assert!(!ant.tick_energy(dt, false, &mut store));
             ticks += 1;
         }
 
@@ -294,7 +358,7 @@ mod tests {
 
         let mut starved = false;
         for _ in 0..64 * 120 {
-            if ant.tick_energy(dt, false) {
+            if ant.tick_energy(dt, false, &mut store) {
                 starved = true;
                 break;
             }
@@ -308,7 +372,8 @@ mod tests {
         ant.phase = AntPhase::Nursing;
         ant.energy = ANT_ENERGY_RETURN_THRESHOLD * 0.5;
 
-        assert!(!ant.tick_energy(1.0, false));
+        let mut store = NestStore { food: 0.0 };
+        assert!(!ant.tick_energy(1.0, false, &mut store));
         assert_eq!(
             ant.phase,
             AntPhase::Nursing,
@@ -321,15 +386,67 @@ mod tests {
         let mut laden = Ant::test_ant(0.0);
         laden.has_food = true;
         let mut walker = Ant::test_ant(0.0);
+        let mut empty = NestStore { food: 0.0 };
 
-        laden.tick_energy(1.0, false);
-        walker.tick_energy(1.0, false);
+        laden.tick_energy(1.0, false, &mut empty);
+        walker.tick_energy(1.0, false, &mut empty);
         assert!(laden.energy < walker.energy);
 
         laden.phase = AntPhase::Returning;
-        assert!(!laden.tick_energy(1.0, true));
+        let mut stocked = NestStore { food: 10.0 };
+        assert!(!laden.tick_energy(1.0, true, &mut stocked));
         assert!((laden.energy - 1.0).abs() < EPS);
         assert_eq!(laden.phase, AntPhase::Foraging);
+        assert!(stocked.food < 10.0, "the refill must be paid for");
+    }
+
+    #[test]
+    fn nest_refill_consumes_store_and_stalls_when_empty() {
+        let dt = 1.0 / 64.0;
+        let mut ant = Ant::test_ant(0.0);
+        ant.energy = 0.2;
+        let mut store = NestStore { food: 10.0 };
+
+        // One second of refill: +0.5 energy for 0.05 food.
+        for _ in 0..64 {
+            assert!(!ant.tick_energy(dt, true, &mut store));
+        }
+        assert!((ant.energy - 0.7).abs() < 1e-4, "energy {}", ant.energy);
+        assert!((store.food - 9.95).abs() < 1e-4, "store {}", store.food);
+
+        // Keep refilling to a full tank.
+        for _ in 0..64 {
+            ant.tick_energy(dt, true, &mut store);
+        }
+        assert!((ant.energy - 1.0).abs() < EPS);
+        assert!((store.food - 9.92).abs() < 1e-3, "store {}", store.food);
+
+        // Empty store: no refill, the ant drains again even in the nest.
+        store.food = 0.0;
+        ant.energy = 0.5;
+        for _ in 0..64 {
+            ant.tick_energy(dt, true, &mut store);
+        }
+        assert!(ant.energy < 0.5, "empty store must not refill");
+        assert!(ant.energy > 0.49);
+    }
+
+    #[test]
+    fn nest_refill_is_frame_rate_independent() {
+        let mut fine = Ant::test_ant(0.0);
+        fine.energy = 0.2;
+        let mut fine_store = NestStore { food: 10.0 };
+        for _ in 0..64 {
+            fine.tick_energy(1.0 / 64.0, true, &mut fine_store);
+        }
+
+        let mut coarse = Ant::test_ant(0.0);
+        coarse.energy = 0.2;
+        let mut coarse_store = NestStore { food: 10.0 };
+        coarse.tick_energy(1.0, true, &mut coarse_store);
+
+        assert!((fine.energy - coarse.energy).abs() < 1e-4);
+        assert!((fine_store.food - coarse_store.food).abs() < 1e-4);
     }
 
     #[test]
@@ -344,6 +461,111 @@ mod tests {
 
         ant.age = threshold;
         assert!(ant.nursing_over());
+    }
+
+    #[test]
+    fn recruitment_gate_scales_with_the_store_and_stops_when_empty() {
+        let capacity = MAX_ANTS;
+
+        assert_eq!(
+            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD, capacity),
+            ANT_BATCH_SIZE
+        );
+        assert_eq!(
+            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD / 2.0, capacity),
+            ANT_BATCH_SIZE / 2
+        );
+        assert_eq!(
+            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD * 10.0, capacity),
+            ANT_BATCH_SIZE,
+            "a full store must not over-spawn"
+        );
+        assert_eq!(
+            recruitment_batch(1.0, 1.0, 0.0, capacity),
+            0,
+            "an empty store stops recruitment entirely"
+        );
+        assert_eq!(recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD, 7), 7);
+        assert_eq!(recruitment_batch(0.0, 2.5, RECRUIT_THRESHOLD, capacity), 0);
+    }
+
+    fn spawn_app(store_food: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Time::<Fixed>::from_hz(64.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+                1.0 / 64.0,
+            )))
+            .init_resource::<AntPopulation>()
+            .init_resource::<ColonyStats>()
+            .init_resource::<NestPosition>()
+            .insert_resource(NestStore { food: store_food })
+            .insert_resource(AntSpawner {
+                timer: Timer::from_seconds(0.01, TimerMode::Repeating),
+            })
+            .add_systems(FixedUpdate, spawn_ants);
+        app
+    }
+
+    #[test]
+    fn spawn_ants_keeps_population_exact_and_gated_by_the_store() {
+        let mut stocked = spawn_app(NEST_STORE_CAP);
+        // The first frame only primes the virtual clock; the fixed step runs
+        // on the second update.
+        stocked.update();
+        stocked.update();
+
+        let mut query = stocked.world_mut().query::<&Ant>();
+        let spawned = query.iter(stocked.world()).count();
+        assert!(spawned > 0, "a stocked colony must recruit");
+        assert_eq!(
+            spawned,
+            stocked.world().resource::<AntPopulation>().0,
+            "AntPopulation must stay exact"
+        );
+
+        let mut starving = spawn_app(0.0);
+        starving.update();
+        starving.update();
+        assert_eq!(starving.world().resource::<AntPopulation>().0, 0);
+        let mut query = starving.world_mut().query::<&Ant>();
+        assert_eq!(query.iter(starving.world()).count(), 0);
+    }
+
+    #[test]
+    fn nursing_upkeep_drains_the_store() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Time::<Fixed>::from_hz(64.0))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+                1.0 / 64.0,
+            )))
+            .insert_resource(NestPosition(Vec2::ZERO))
+            .init_resource::<AntPopulation>()
+            .insert_resource(NestStore { food: 1.0 })
+            .add_systems(FixedUpdate, update_ant_energy_age);
+
+        for _ in 0..2 {
+            let mut ant = Ant::test_ant(0.0);
+            ant.phase = AntPhase::Nursing;
+            app.world_mut()
+                .spawn((ant, Transform::from_xyz(0.0, 0.0, 0.0)));
+        }
+        app.world_mut().resource_mut::<AntPopulation>().0 = 2;
+
+        // The first frame only primes the virtual clock; the fixed step runs
+        // on the second update.
+        app.update();
+        app.update();
+
+        let expected = 1.0 - 2.0 * NURSE_UPKEEP_PER_ANT * (1.0 / 64.0);
+        let store = app.world().resource::<NestStore>();
+        assert!(
+            (store.food - expected).abs() < 1e-6,
+            "two nurses for one tick should drain {} food, store is {}",
+            2.0 * NURSE_UPKEEP_PER_ANT * (1.0 / 64.0),
+            store.food
+        );
     }
 
     /// Guards the foraging economy: a median (base-speed, base-lifetime) ant

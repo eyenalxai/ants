@@ -1,4 +1,5 @@
-//! Top-left HUD row (pause + exclusive editor tools) and the paused indicator.
+//! Top-left HUD row (pause + exclusive editor tools), the paused indicator and
+//! the colony food-economy stats block.
 
 use bevy::prelude::*;
 
@@ -9,11 +10,90 @@ use crate::constants::ui::{
 };
 use crate::core::sets::Paused;
 use crate::editor::{EditorMode, EditorModeKind, toggled_mode};
+use crate::simulation::ant::AntPopulation;
+use crate::simulation::colony::{ColonyStats, NestStore};
 use crate::ui::widgets::{self, ButtonAction, ButtonActiveWhen, ToolButton};
+
+/// Top offset of the colony stats panel as a percentage, just below the
+/// controls row and the paused indicator.
+const UI_STATS_TOP_PERCENT: f32 = 17.0;
+/// Font size of the colony stats panel in logical pixels.
+const UI_STATS_FONT_SIZE: f32 = 14.0;
+/// Text color of the colony stats panel.
+const UI_STATS_TEXT_COLOR: Color = Color::srgba(0.85, 0.85, 0.85, 1.0);
+/// Initial text of the colony stats panel, replaced on the first update.
+const COLONY_STATS_PLACEHOLDER: &str = "ants -   nest food -\ndelivery -/s   total -";
 
 /// Marker for the "PAUSED" overlay root.
 #[derive(Component)]
 pub struct PausedIndicator;
+
+/// Marker for the colony stats text entity.
+#[derive(Component)]
+pub struct ColonyStatsText;
+
+/// Last displayed colony snapshot, quantized to the precision actually shown.
+/// The text is only rewritten when one of these values changes, so a stable
+/// colony does not dirty the UI text layout every frame.
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ColonyStatsCache {
+    population: usize,
+    store: i32,
+    rate_tenths: i32,
+    total: i32,
+}
+
+impl ColonyStatsCache {
+    /// Quantize the live values to what the panel displays: whole ants and
+    /// food, delivery rate to one decimal per second.
+    fn capture(population: usize, store: f32, rate: f32, total: f32) -> Self {
+        Self {
+            population,
+            store: store.round() as i32,
+            rate_tenths: (rate * 10.0).round() as i32,
+            total: total.round() as i32,
+        }
+    }
+
+    /// Panel text for this snapshot.
+    fn render(&self) -> String {
+        format!(
+            "ants {}   nest food {}\ndelivery {:.1}/s   total {}",
+            self.population,
+            self.store,
+            self.rate_tenths as f32 / 10.0,
+            self.total,
+        )
+    }
+}
+
+/// Keep the colony stats panel in sync with the food economy.
+///
+/// Runs in `Update`; the fixed-step chain only mutates the resources, so while
+/// the colony is paused or stable the cached snapshot matches and the text is
+/// left untouched.
+pub fn update_colony_stats_hud(
+    population: Res<AntPopulation>,
+    store: Res<NestStore>,
+    colony: Res<ColonyStats>,
+    mut text_query: Query<(&mut Text, &mut ColonyStatsCache), With<ColonyStatsText>>,
+) {
+    for (mut text, mut cache) in &mut text_query {
+        let snapshot = ColonyStatsCache::capture(
+            population.0,
+            store.food,
+            colony.delivery_ema,
+            colony.total_food_delivered,
+        );
+
+        if *cache == snapshot {
+            continue;
+        }
+
+        text.0 = snapshot.render();
+        *cache = snapshot;
+    }
+}
 
 /// Spawn the HUD row and the paused indicator once.
 pub fn setup_hud(mut commands: Commands) {
@@ -63,6 +143,29 @@ pub fn setup_hud(mut commands: Commands) {
             },
         );
     });
+
+    widgets::spawn_panel(
+        &mut commands,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(UI_EDGE_INSET_PERCENT),
+            top: Val::Percent(UI_STATS_TOP_PERCENT),
+            padding: UiRect::all(Val::Px(UI_PANEL_PADDING)),
+            ..default()
+        },
+        UI_Z_HUD,
+    )
+    .with_child((
+        ColonyStatsText,
+        ColonyStatsCache::default(),
+        Text::new(COLONY_STATS_PLACEHOLDER),
+        TextFont {
+            font_size: FontSize::Px(UI_STATS_FONT_SIZE),
+            ..default()
+        },
+        TextColor(UI_STATS_TEXT_COLOR),
+        Node::default(),
+    ));
 
     widgets::spawn_panel(
         &mut commands,
@@ -133,4 +236,106 @@ pub fn sync_paused_indicator(
     } else {
         Visibility::Hidden
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn stats_cache_quantizes_to_what_is_displayed() {
+        let base = ColonyStatsCache::capture(100, 150.4, 2.04, 10.4);
+        assert_eq!(base, ColonyStatsCache::capture(100, 150.1, 2.01, 10.1));
+        assert_ne!(base, ColonyStatsCache::capture(101, 150.4, 2.04, 10.4));
+        assert_ne!(base, ColonyStatsCache::capture(100, 150.6, 2.04, 10.4));
+        assert_ne!(base, ColonyStatsCache::capture(100, 150.4, 2.06, 10.4));
+        assert_ne!(base, ColonyStatsCache::capture(100, 150.4, 2.04, 10.6));
+    }
+
+    #[test]
+    fn stats_cache_renders_population_store_rate_and_total() {
+        let text = ColonyStatsCache::capture(1234, 812.4, 12.34, 4567.0).render();
+        assert!(text.contains("ants 1234"), "{text}");
+        assert!(text.contains("nest food 812"), "{text}");
+        assert!(text.contains("delivery 12.3/s"), "{text}");
+        assert!(text.contains("total 4567"), "{text}");
+    }
+
+    #[test]
+    fn colony_stats_text_only_rewrites_when_displayed_values_change() {
+        let mut world = World::new();
+        world.init_resource::<AntPopulation>();
+        world.init_resource::<NestStore>();
+        world.init_resource::<ColonyStats>();
+        world.run_system_once(setup_hud).unwrap();
+
+        world.resource_mut::<AntPopulation>().0 = 1234;
+        world.resource_mut::<NestStore>().food = 812.4;
+        {
+            let mut colony = world.resource_mut::<ColonyStats>();
+            colony.delivery_ema = 12.34;
+            colony.total_food_delivered = 4567.0;
+        }
+
+        world.run_system_once(update_colony_stats_hud).unwrap();
+
+        let mut query = world.query_filtered::<Entity, With<ColonyStatsText>>();
+        let entity = query.single(&world).expect("stats text entity");
+        let rendered = world.get::<Text>(entity).unwrap().0.clone();
+        assert!(
+            rendered.contains("1234") && rendered.contains("812"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("12.3") && rendered.contains("4567"),
+            "{rendered}"
+        );
+
+        // A sub-display change must not touch the text.
+        let before = world
+            .entity(entity)
+            .get_change_ticks::<Text>()
+            .unwrap()
+            .changed;
+        world.resource_mut::<NestStore>().food = 812.1;
+        world.resource_mut::<ColonyStats>().delivery_ema = 12.31;
+        world.run_system_once(update_colony_stats_hud).unwrap();
+        assert_eq!(
+            before,
+            world
+                .entity(entity)
+                .get_change_ticks::<Text>()
+                .unwrap()
+                .changed
+        );
+
+        // A displayed change does.
+        world.resource_mut::<NestStore>().food = 700.0;
+        world.run_system_once(update_colony_stats_hud).unwrap();
+        assert_ne!(
+            before,
+            world
+                .entity(entity)
+                .get_change_ticks::<Text>()
+                .unwrap()
+                .changed
+        );
+        assert!(world.get::<Text>(entity).unwrap().0.contains("700"));
+    }
+
+    #[test]
+    fn setup_hud_keeps_the_paused_indicator_and_adds_the_stats_panel() {
+        let mut world = World::new();
+        world.run_system_once(setup_hud).unwrap();
+
+        let mut paused = world.query_filtered::<&Visibility, With<PausedIndicator>>();
+        assert_eq!(
+            *paused.single(&world).expect("paused indicator"),
+            Visibility::Hidden
+        );
+
+        let mut stats = world.query_filtered::<Entity, With<ColonyStatsText>>();
+        assert!(stats.single(&world).is_ok());
+    }
 }
