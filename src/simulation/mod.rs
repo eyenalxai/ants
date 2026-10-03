@@ -282,6 +282,7 @@ fn spawn_world(
 mod tests {
     use super::*;
     use crate::pheromone::PheromonePlugin;
+    use crate::simulation::ant::AntRng;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 
@@ -374,7 +375,11 @@ mod tests {
         let ant = Ant::test_ant(0.0);
         let entity = app
             .world_mut()
-            .spawn((ant, Transform::from_xyz(start.x, start.y, 0.0)))
+            .spawn((
+                ant,
+                AntRng::for_spawn(0),
+                Transform::from_xyz(start.x, start.y, 0.0),
+            ))
             .id();
 
         app.update();

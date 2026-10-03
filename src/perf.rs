@@ -117,7 +117,7 @@ mod tests {
     use crate::pheromone::PheromonePlugin;
     use crate::pheromone::grid::PheromoneGrid;
     use crate::simulation::Nest;
-    use crate::simulation::ant::{Ant, AntPhase};
+    use crate::simulation::ant::{Ant, AntPhase, AntRng};
     use crate::simulation::{SimulationPlugin, food};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
@@ -172,7 +172,11 @@ mod tests {
                 rng.f32() * PLAY_AREA_WIDTH - PLAY_AREA_WIDTH / 2.0,
                 rng.f32() * PLAY_AREA_HEIGHT - PLAY_AREA_HEIGHT / 2.0,
             );
-            world.spawn((ant, Transform::from_xyz(position.x, position.y, Z_ANT)));
+            world.spawn((
+                ant,
+                AntRng::for_spawn(index as u64),
+                Transform::from_xyz(position.x, position.y, Z_ANT),
+            ));
         }
 
         // Warm a sparse trail so decay and diffusion do real work.
