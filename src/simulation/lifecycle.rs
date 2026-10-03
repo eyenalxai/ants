@@ -17,7 +17,11 @@ use crate::constants::lifecycle::{
     CORPSE_CARRY_SPEED, CORPSE_DROP_RADIUS, CORPSE_PICKUP_RADIUS, CORPSE_TTL, CORPSE_Z,
     MORTALITY_HAZARD,
 };
-use crate::constants::world::NEST_RADIUS;
+use crate::constants::world::{
+    DENSITY_CELL_SIZE, DENSITY_GRID_HEIGHT, DENSITY_GRID_WIDTH, NEST_RADIUS, PLAY_AREA_HEIGHT,
+    PLAY_AREA_WIDTH,
+};
+use crate::core::grid::world_to_index;
 use crate::core::sets::SimSet;
 use crate::simulation::NestPosition;
 use crate::simulation::ant::{Ant, AntPhase, AntPopulation, AntRng};
@@ -157,21 +161,148 @@ pub fn mortality(
     }
 }
 
-/// Foraging ants pick up the nearest corpse within [`CORPSE_PICKUP_RADIUS`]
-/// (necrophoresis). The ant is held in the "busy" state while carrying so
-/// movement, collision and deposit skip it; [`carry_corpses`] walks it to the
-/// refuse pile.
-pub fn pick_up_corpses(
+/// Bucketed spatial index over every corpse, rebuilt once per fixed tick.
+///
+/// Cell size is [`DENSITY_CELL_SIZE`] (8 u), which is at least
+/// [`CORPSE_PICKUP_RADIUS`] (3 u), so every corpse within pickup range of an
+/// ant lies in the 3x3 neighborhood of the ant's cell. Buckets keep their
+/// capacity between ticks and [`CorpseGrid::rebuild`] clears only the cells
+/// recorded in `touched`, so maintenance is O(corpses) per tick instead of
+/// O(grid cells), and no per-tick heap growth accumulates in steady state.
+///
+/// Determinism: corpses are inserted in query order (stable entity order) and
+/// queried by scanning the 3x3 neighborhood in a fixed `(dy, dx)` order, with
+/// each bucket in insertion order. A claim removes the corpse from its bucket,
+/// so a corpse is claimed by at most one ant per tick. The whole pass depends
+/// only on the entity iteration order and the corpse positions.
+pub(crate) struct CorpseGrid {
+    cells: Box<[Vec<(Entity, Vec2)>]>,
+    /// Cells holding at least one corpse after the last [`Self::rebuild`];
+    /// only these need clearing on the next rebuild.
+    touched: Vec<usize>,
+}
+
+impl Default for CorpseGrid {
+    fn default() -> Self {
+        Self {
+            cells: (0..DENSITY_GRID_WIDTH * DENSITY_GRID_HEIGHT)
+                .map(|_| Vec::new())
+                .collect(),
+            touched: Vec::new(),
+        }
+    }
+}
+
+impl CorpseGrid {
+    /// Rebuild the index from every corpse, reusing bucket capacity.
+    fn rebuild(&mut self, corpses: impl Iterator<Item = (Entity, Vec2)>) {
+        for &index in &self.touched {
+            self.cells[index].clear();
+        }
+        self.touched.clear();
+
+        for (entity, pos) in corpses {
+            let index = corpse_cell(pos);
+
+            if self.cells[index].is_empty() {
+                self.touched.push(index);
+            }
+
+            self.cells[index].push((entity, pos));
+        }
+    }
+
+    /// Whether the last [`Self::rebuild`] found no corpses at all.
+    fn is_empty(&self) -> bool {
+        self.touched.is_empty()
+    }
+
+    /// Claim the first corpse within `radius_squared` of `pos` in the fixed
+    /// neighborhood scan order, removing it so no other ant can claim it this
+    /// tick.
+    fn claim(&mut self, pos: Vec2, radius_squared: f32) -> Option<Entity> {
+        let index = corpse_cell(pos);
+        let cell_x = index % DENSITY_GRID_WIDTH;
+        let cell_y = index / DENSITY_GRID_WIDTH;
+
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
+                let x = cell_x as i32 + dx;
+                let y = cell_y as i32 + dy;
+
+                if x < 0
+                    || y < 0
+                    || x >= DENSITY_GRID_WIDTH as i32
+                    || y >= DENSITY_GRID_HEIGHT as i32
+                {
+                    continue;
+                }
+
+                let bucket = &mut self.cells[y as usize * DENSITY_GRID_WIDTH + x as usize];
+
+                if let Some(claimed) = bucket
+                    .iter()
+                    .position(|(_, corpse_pos)| corpse_pos.distance_squared(pos) <= radius_squared)
+                {
+                    // `remove` (not `swap_remove`) keeps each bucket in
+                    // insertion order for the rest of the tick.
+                    let (entity, _) = bucket.remove(claimed);
+                    return Some(entity);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Flat index of the corpse-grid cell containing `pos`.
+///
+/// Unlike [`world_to_index`] this mapping is total: wall clamping leaves ants
+/// exactly on `±PLAY_AREA_WIDTH/2` / `±PLAY_AREA_HEIGHT/2`, which the
+/// half-open play area would reject. Clamping `pos` into the grid moves at
+/// most half a cell at the positive edges (still inside the last cell), so
+/// boundary ants and corpses stay addressable and distant out-of-bounds
+/// positions simply land in the nearest edge cell.
+fn corpse_cell(pos: Vec2) -> usize {
+    let limit = Vec2::new(
+        PLAY_AREA_WIDTH / 2.0 - DENSITY_CELL_SIZE / 2.0,
+        PLAY_AREA_HEIGHT / 2.0 - DENSITY_CELL_SIZE / 2.0,
+    );
+
+    world_to_index(
+        pos.clamp(-limit, limit),
+        DENSITY_CELL_SIZE,
+        DENSITY_GRID_WIDTH,
+        DENSITY_GRID_HEIGHT,
+    )
+    .expect("a clamped position lies inside the play area")
+}
+
+/// Foraging ants pick up the first corpse within [`CORPSE_PICKUP_RADIUS`]
+/// (necrophoresis), queried from a bucketed corpse index over the 3x3 cell
+/// neighborhood of the ant. The ant is held in the "busy" state while carrying
+/// so movement, collision and deposit skip it; [`carry_corpses`] walks it to
+/// the refuse pile.
+///
+/// The index is rebuilt once per tick in a fixed order, so the pass is
+/// O(ants + corpses) instead of O(ants * corpses). Claimed corpses are removed
+/// from the index immediately, preserving the "one corpse per ant, one ant per
+/// corpse per tick" rule. The system is allocation-free in steady state: the
+/// [`Local`] grid only ever grows bucket capacity.
+pub(crate) fn pick_up_corpses(
     mut commands: Commands,
     mut ant_query: Query<(&mut Ant, &Transform)>,
     corpse_query: Query<(Entity, &Transform), With<Corpse>>,
+    mut grid: Local<CorpseGrid>,
 ) {
-    let mut corpses: Vec<(Entity, Vec2)> = corpse_query
-        .iter()
-        .map(|(entity, transform)| (entity, transform.translation.truncate()))
-        .collect();
+    grid.rebuild(
+        corpse_query
+            .iter()
+            .map(|(entity, transform)| (entity, transform.translation.truncate())),
+    );
 
-    if corpses.is_empty() {
+    if grid.is_empty() {
         return;
     }
 
@@ -187,16 +318,10 @@ pub fn pick_up_corpses(
         }
 
         let pos = transform.translation.truncate();
-        let Some(index) = corpses
-            .iter()
-            .position(|(_, corpse_pos)| corpse_pos.distance_squared(pos) <= pickup_squared)
-        else {
+        let Some(corpse) = grid.claim(pos, pickup_squared) else {
             continue;
         };
 
-        // Remove the claimed corpse from the local list so a second ant cannot
-        // pick up the same entity within this tick.
-        let (corpse, _) = corpses.remove(index);
         commands.entity(corpse).despawn();
         ant.carrying_corpse = true;
         ant.start_handling();
@@ -639,6 +764,232 @@ mod tests {
             world.get_entity(corpse).is_ok(),
             "the corpse must stay for a foraging ant"
         );
+    }
+
+    /// The corpse index is bucketed at [`DENSITY_CELL_SIZE`]; a corpse in the
+    /// neighboring cell of the ant's cell must still be found.
+    #[test]
+    fn corpse_pickup_crosses_grid_cell_boundaries() {
+        let mut world = base_world();
+
+        // A density cell boundary sits at x = 0, so the two positions below
+        // are in different cells one unit apart.
+        let corpse = world
+            .spawn((
+                Corpse { ttl: CORPSE_TTL },
+                Transform::from_xyz(0.5, 0.0, 0.0),
+            ))
+            .id();
+        let ant_id = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(-0.5, 0.0, 0.0)))
+            .id();
+
+        step(&mut world, DT);
+        world.run_system_once(pick_up_corpses).unwrap();
+
+        assert!(
+            world.get::<Ant>(ant_id).unwrap().carrying_corpse,
+            "a corpse one cell over must be claimable"
+        );
+        assert!(world.get_entity(corpse).is_err());
+    }
+
+    /// A corpse may be claimed by at most one ant per tick.
+    #[test]
+    fn one_corpse_is_claimed_by_a_single_ant() {
+        let mut world = base_world();
+
+        let corpse = world
+            .spawn((
+                Corpse { ttl: CORPSE_TTL },
+                Transform::from_xyz(1.0, 0.0, 0.0),
+            ))
+            .id();
+        let first = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        let second = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(0.5, 0.0, 0.0)))
+            .id();
+
+        step(&mut world, DT);
+        world.run_system_once(pick_up_corpses).unwrap();
+
+        let carriers = [first, second]
+            .into_iter()
+            .filter(|entity| world.get::<Ant>(*entity).unwrap().carrying_corpse)
+            .count();
+        assert_eq!(carriers, 1, "exactly one ant may claim the corpse");
+        assert!(world.get_entity(corpse).is_err());
+    }
+
+    /// Corpses outside [`CORPSE_PICKUP_RADIUS`] are left alone.
+    #[test]
+    fn corpse_outside_pickup_radius_is_not_claimed() {
+        let mut world = base_world();
+
+        let corpse = world
+            .spawn((
+                Corpse { ttl: CORPSE_TTL },
+                Transform::from_xyz(CORPSE_PICKUP_RADIUS + 1.0, 0.0, 0.0),
+            ))
+            .id();
+        let ant_id = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+
+        step(&mut world, DT);
+        world.run_system_once(pick_up_corpses).unwrap();
+
+        assert!(!world.get::<Ant>(ant_id).unwrap().carrying_corpse);
+        assert!(world.get_entity(corpse).is_ok());
+    }
+
+    /// Wall clamping puts ants exactly on the half-open play-area edge; a
+    /// corpse there must still be addressable by the index.
+    #[test]
+    fn corpse_on_the_wall_boundary_is_claimable() {
+        use crate::constants::world::{PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
+
+        let mut world = base_world();
+        let edge = Vec2::new(PLAY_AREA_WIDTH / 2.0, -PLAY_AREA_HEIGHT / 2.0);
+
+        let corpse = world
+            .spawn((
+                Corpse { ttl: CORPSE_TTL },
+                Transform::from_xyz(edge.x, edge.y, 0.0),
+            ))
+            .id();
+        let ant_id = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(edge.x, edge.y, 0.0)))
+            .id();
+
+        step(&mut world, DT);
+        world.run_system_once(pick_up_corpses).unwrap();
+
+        assert!(
+            world.get::<Ant>(ant_id).unwrap().carrying_corpse,
+            "a corpse on the play-area edge must be claimable"
+        );
+        assert!(world.get_entity(corpse).is_err());
+    }
+
+    /// 120 s performance analysis harness (ignored; run manually).
+    ///
+    /// Builds the real chain (`build_app` + environment + nest + lifecycle)
+    /// and compares three variants at a fixed population cap: no lifecycle,
+    /// the full lifecycle, and the full lifecycle with corpses culled every
+    /// tick. The last one isolates the corpse-handling cost from the rest of
+    /// the chain.
+    ///
+    /// Env knobs: `PERF120_SECS` (default 120), `PERF120_CAP` (default 10000)
+    /// and `PERF120_VARIANTS` (comma-separated subset of `none,full,cull`).
+    #[test]
+    #[ignore = "120 s analysis; run manually"]
+    fn perf120_analysis() {
+        use crate::simulation::ant::AntSpawner;
+        use crate::simulation::trail_tests::{FoodSetup, build_app};
+        use crate::simulation::{environment, nest};
+        use std::time::Instant;
+
+        #[derive(Clone, Copy)]
+        enum Variant {
+            None,
+            Full,
+            Cull,
+        }
+
+        fn corpse_count(app: &mut App) -> usize {
+            let world = app.world_mut();
+            let mut query = world.query::<&Corpse>();
+            query.iter(world).count()
+        }
+
+        fn cull_corpses(mut commands: Commands, corpses: Query<Entity, With<Corpse>>) {
+            for entity in &corpses {
+                commands.entity(entity).despawn();
+            }
+        }
+
+        fn run(label: &str, variant: Variant, cap: usize, secs: u32) {
+            let mut app = build_app(FoodSetup::Real);
+            environment::register(&mut app);
+            nest::register(&mut app);
+
+            match variant {
+                Variant::None => {}
+                Variant::Full => register(&mut app),
+                Variant::Cull => {
+                    register(&mut app);
+                    app.add_systems(
+                        FixedUpdate,
+                        cull_corpses
+                            .before(pick_up_corpses)
+                            .in_set(SimSet::Lifecycle),
+                    );
+                }
+            }
+
+            // Warm up to the population cap (or the whole budget if it never
+            // gets there), then stop the spawner so the population is fixed.
+            let mut warm = 0u32;
+            while app.world().resource::<AntPopulation>().count() < cap && warm < secs * 64 {
+                app.update();
+                warm += 1;
+            }
+            app.world_mut()
+                .resource_mut::<AntSpawner>()
+                .timer
+                .set_duration(Duration::from_secs(3600));
+
+            println!(
+                "[{label}] warmup {warm} ticks, pop={} corpses={}",
+                app.world().resource::<AntPopulation>().count(),
+                corpse_count(&mut app)
+            );
+
+            let mut sum = 0f64;
+            for sec in 1..=secs {
+                let start = Instant::now();
+                for _ in 0..64 {
+                    app.update();
+                }
+                let ms = start.elapsed().as_secs_f64() * 1000.0 / 64.0;
+                sum += ms;
+
+                if sec % 10 == 0 {
+                    println!(
+                        "[{label}] t={sec:>3}s chain={ms:8.3} ms/tick pop={:>6} corpses={:>5}",
+                        app.world().resource::<AntPopulation>().count(),
+                        corpse_count(&mut app),
+                    );
+                }
+            }
+            println!(
+                "[{label}] {secs} s average = {:.3} ms/tick",
+                sum / secs as f64
+            );
+        }
+
+        let secs: u32 = std::env::var("PERF120_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(120);
+        let cap: usize = std::env::var("PERF120_CAP")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(10_000);
+        let variants =
+            std::env::var("PERF120_VARIANTS").unwrap_or_else(|_| "none,full,cull".into());
+
+        for variant in variants.split(',') {
+            match variant.trim() {
+                "none" => run("no-lifecycle", Variant::None, cap, secs),
+                "full" => run("full", Variant::Full, cap, secs),
+                "cull" => run("no-corpses", Variant::Cull, cap, secs),
+                other => panic!("unknown PERF120_VARIANTS entry {other:?}"),
+            }
+        }
     }
 
     /// Integration harness for the frozen trail gate: runs the real emergence
