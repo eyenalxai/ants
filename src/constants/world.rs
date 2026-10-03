@@ -31,11 +31,12 @@ pub const WALL_THICKNESS: f32 = 2.0;
 
 /// Food units in each cell of the initial 3×3 patch at [`FOOD_X`], [`FOOD_Y`].
 ///
-/// The patch therefore holds `9 × 100 = 900` units, i.e. 900 full carry trips:
-/// finite enough that depletion is observable within a session (at typical
-/// 10–30 deliveries/s that is 30–90 s of peak exploitation) and small enough
-/// that the trail has a reason to move.
-pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
+/// The patch therefore holds `9 × 1000 = 9000` units, i.e. 9000 full carry
+/// trips: finite enough that depletion is observable within a session (at the
+/// default colony size of up to 30 000 ants it lasts minutes at peak delivery
+/// rates) while keeping the trail a reason to move. The per-cell quality
+/// pattern is independent of this amount.
+pub const INITIAL_FOOD_AMOUNT: f32 = 1000.0;
 /// Lowest per-cell quality in the deterministic initial patch pattern.
 pub const FOOD_QUALITY_MIN: f32 = 0.8;
 /// Highest per-cell quality in the deterministic initial patch pattern.

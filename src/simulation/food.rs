@@ -985,10 +985,10 @@ mod tests {
 
         for &cell in &cells {
             let mut grid = world.resource_mut::<FoodGrid>();
-            // Partial loads: 60 + 60 + 30 takes exactly the 100 stored units.
+            // Partial loads: 60 + 60 + the rest takes the whole cell.
             taken_total += grid.take(cell, 60.0);
             taken_total += grid.take(cell, 60.0);
-            taken_total += grid.take(cell, 30.0);
+            taken_total += grid.take(cell, INITIAL_FOOD_AMOUNT);
         }
 
         assert_eq!(taken_total, 9.0 * INITIAL_FOOD_AMOUNT);
