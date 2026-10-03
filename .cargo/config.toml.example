@@ -1,0 +1,25 @@
+# Example Cargo config for fast local builds. Copy it to `.cargo/config.toml`
+# (untracked, machine-specific) to opt in.
+#
+# Requirements:
+#   - a nightly Rust toolchain (for the unstable cranelift codegen backend)
+#   - `mold` installed at /usr/bin/mold and `clang` available on PATH
+#
+# With this config, dev builds use the cranelift backend (much faster codegen,
+# slower runtime) while dependencies are still built with LLVM.
+#
+# Do NOT commit the copied `.cargo/config.toml`; CI and other machines build
+# with the standard linker and the LLVM backend.
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+
+[unstable]
+codegen-backend = true
+
+[profile.dev]
+codegen-backend = "cranelift"
+
+[profile.dev.package."*"]
+codegen-backend = "llvm"

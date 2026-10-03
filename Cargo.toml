@@ -4,14 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.17.2", features = ["dynamic_linking"] }
+bevy = { version = "0.17.2" }
 fastrand = "2.3.0"
-log = { version = "*", features = [
-  "max_level_debug",
-  "release_max_level_warn",
-] }
-rand = "0.9"
+# Bevy pulls `log` in transitively; these features cap runtime log levels:
+# debug and below in dev builds, warn and below in release builds.
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 
+[features]
+# Opt-in dynamic linking for faster iterative builds:
+# `cargo run --features dynamic_linking`.
+dynamic_linking = ["bevy/dynamic_linking"]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
