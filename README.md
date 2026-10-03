@@ -87,7 +87,7 @@ cargo test --locked
 `dynamic_linking` is an opt-in Cargo feature wrapping Bevy's
 `bevy/dynamic_linking`. It links Bevy as a shared library, which speeds up
 incremental dev builds at the cost of slower startup and a non-portable binary.
-Use it for local iteration only; CI compiles it via `cargo check --all-features`.
+Use it for local iteration only.
 
 ### Logging
 
@@ -105,15 +105,11 @@ cargo test --locked
 cargo build --locked
 ```
 
-CI runs those checks on stable Rust plus a docs gate
-(`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`), an all-features
-check, the 1.95.0 MSRV check and `cargo-deny` (see
-`.github/workflows/ci.yml`). Dependabot proposes cargo and GitHub Actions
-updates weekly.
+There is no CI; run these checks locally before committing.
 
 ### Local linker configuration
 
-`.cargo/config.toml` is machine-specific and untracked, so CI and other machines
+`.cargo/config.toml` is machine-specific and untracked, so other machines
 build with the standard toolchain and linker. To opt into faster dev builds on
 this machine:
 
