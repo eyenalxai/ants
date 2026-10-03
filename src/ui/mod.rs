@@ -2,6 +2,7 @@
 
 pub mod fps;
 pub mod hud;
+pub mod widgets;
 
 use bevy::prelude::*;
 
@@ -12,22 +13,13 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Paused>()
-            .add_systems(
-                Startup,
-                (
-                    fps::setup_fps_counter,
-                    hud::setup_pause_button,
-                    hud::setup_food_button,
-                    hud::setup_nest_button,
-                ),
-            )
+            .add_systems(Startup, (hud::setup_hud, fps::setup_fps_counter))
             .add_systems(
                 Update,
                 (
-                    hud::toggle_pause,
-                    hud::toggle_food_management,
-                    hud::toggle_nest_management,
-                    hud::sync_editor_button_colors,
+                    hud::handle_button_press,
+                    widgets::sync_tool_button_colors,
+                    hud::sync_paused_indicator,
                     fps::fps_text_update_system,
                     fps::fps_counter_showhide,
                 )

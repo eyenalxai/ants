@@ -1,7 +1,11 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
-use crate::constants::ui::{UI_EDGE_INSET_PERCENT, UI_FONT_SIZE, UI_FPS_PANEL_PADDING};
+use crate::constants::ui::{
+    UI_EDGE_INSET_PERCENT, UI_FONT_SIZE, UI_FPS_GOOD, UI_FPS_LOW, UI_FPS_OK, UI_FPS_PANEL_PADDING,
+    UI_Z_FPS,
+};
+use crate::ui::widgets;
 
 #[derive(Component)]
 pub struct FpsRoot;
@@ -10,22 +14,19 @@ pub struct FpsRoot;
 pub struct FpsText;
 
 pub fn setup_fps_counter(mut commands: Commands) {
-    let root = commands
-        .spawn((
-            FpsRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Percent(UI_EDGE_INSET_PERCENT),
-                top: Val::Percent(UI_EDGE_INSET_PERCENT),
-                bottom: Val::Auto,
-                left: Val::Auto,
-                padding: UiRect::all(Val::Px(UI_FPS_PANEL_PADDING)),
-                ..Default::default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-            GlobalZIndex(i32::MAX),
-        ))
-        .id();
+    let root = widgets::spawn_panel(
+        &mut commands,
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Percent(UI_EDGE_INSET_PERCENT),
+            top: Val::Percent(UI_EDGE_INSET_PERCENT),
+            padding: UiRect::all(Val::Px(UI_FPS_PANEL_PADDING)),
+            ..default()
+        },
+        UI_Z_FPS,
+    )
+    .insert(FpsRoot)
+    .id();
 
     let text_fps = commands
         .spawn((
@@ -62,12 +63,20 @@ pub fn fps_text_update_system(
         for (mut span, mut color) in &mut span_query {
             span.0 = format!("{value:>4.0}");
 
-            color.0 = if value >= 120.0 {
+            color.0 = if value >= UI_FPS_GOOD {
                 Color::srgb(0.0, 1.0, 0.0)
-            } else if value >= 60.0 {
-                Color::srgb((1.0 - (value - 60.0) / (120.0 - 60.0)) as f32, 1.0, 0.0)
-            } else if value >= 30.0 {
-                Color::srgb(1.0, ((value - 30.0) / (60.0 - 30.0)) as f32, 0.0)
+            } else if value >= UI_FPS_OK {
+                Color::srgb(
+                    (1.0 - (value - UI_FPS_OK) / (UI_FPS_GOOD - UI_FPS_OK)) as f32,
+                    1.0,
+                    0.0,
+                )
+            } else if value >= UI_FPS_LOW {
+                Color::srgb(
+                    1.0,
+                    ((value - UI_FPS_LOW) / (UI_FPS_OK - UI_FPS_LOW)) as f32,
+                    0.0,
+                )
             } else {
                 Color::srgb(1.0, 0.0, 0.0)
             };
