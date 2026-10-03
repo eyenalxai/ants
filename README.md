@@ -7,9 +7,8 @@ runtime. Debug overlays render the pheromone grid and the sensor cone of one ant
 
 ## Prerequisites
 
-The project requires **Rust 1.95 or newer** (Bevy 0.19.1's MSRV; CI checks the
-exact 1.95.0 toolchain). On Linux, Bevy also needs a few system development
-packages. On Debian/Ubuntu:
+The project requires **Rust 1.95 or newer** (Bevy 0.19.1's MSRV). On Linux,
+Bevy also needs a few system development packages. On Debian/Ubuntu:
 
 ```sh
 sudo apt-get install -y \
@@ -20,8 +19,8 @@ sudo apt-get install -y \
   libx11-dev
 ```
 
-CI installs exactly this list. On other distributions, install the equivalent
-ALSA, udev, Wayland, xkbcommon and X11 development packages; see Bevy's
+On other distributions, install the equivalent ALSA, udev, Wayland, xkbcommon
+and X11 development packages; see Bevy's
 [platform setup guide](https://bevy.org/learn/quick-start/getting-started/setup/)
 for per-platform instructions.
 
@@ -76,7 +75,7 @@ and no simulation-owned RNG resource yet, so two runs with the same inputs are
 ### Testing
 
 The unit tests are headless: they build Bevy `App`s without a window, GPU or
-audio device, so `cargo test` works in CI and over SSH.
+audio device, so `cargo test` works over SSH and on machines without a GPU.
 
 ```sh
 cargo test --locked
