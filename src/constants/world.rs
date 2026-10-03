@@ -29,7 +29,17 @@ pub const FOOD_Y: f32 = 0.0;
 pub const WALL_BOUNCE_MIN_ANGLE: f32 = 30.0;
 pub const WALL_THICKNESS: f32 = 2.0;
 
-pub const INITIAL_FOOD_AMOUNT: f32 = 5000.0;
+/// Food units in each cell of the initial 3×3 patch at [`FOOD_X`], [`FOOD_Y`].
+///
+/// The patch therefore holds `9 × 100 = 900` units, i.e. 900 full carry trips:
+/// finite enough that depletion is observable within a session (at typical
+/// 10–30 deliveries/s that is 30–90 s of peak exploitation) and small enough
+/// that the trail has a reason to move.
+pub const INITIAL_FOOD_AMOUNT: f32 = 100.0;
+/// Lowest per-cell quality in the deterministic initial patch pattern.
+pub const FOOD_QUALITY_MIN: f32 = 0.8;
+/// Highest per-cell quality in the deterministic initial patch pattern.
+pub const FOOD_QUALITY_MAX: f32 = 1.2;
 pub const FOOD_CELL_RADIUS: f32 = GRID_SIZE * 0.3;
 
 // Ant-density grid: coarse per-cell ant counts used for crowd avoidance and
