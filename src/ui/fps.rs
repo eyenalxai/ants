@@ -7,7 +7,7 @@ use crate::constants::ui::{
     UI_EDGE_INSET_PERCENT, UI_FONT_SIZE, UI_FPS_GOOD, UI_FPS_LOW, UI_FPS_OK, UI_FPS_PANEL_PADDING,
     UI_Z_FPS,
 };
-use crate::ui::perf::{PerfEnabled, PerfStats};
+use crate::perf::{PerfEnabled, PerfStats};
 use crate::ui::widgets;
 
 #[derive(Component)]

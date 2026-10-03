@@ -4,20 +4,16 @@ pub mod fps;
 pub mod hud;
 pub mod widgets;
 
-// `src/perf.rs` is declared here (rather than from `main.rs`, which this
-// workstream does not own) so the file keeps its requested top-level path.
-#[path = "../perf.rs"]
-pub mod perf;
-
 use bevy::prelude::*;
 
 use crate::core::sets::{GameSet, Paused};
+use crate::perf::PerfPlugin;
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(perf::PerfPlugin)
+        app.add_plugins(PerfPlugin)
             .init_resource::<Paused>()
             .add_systems(Startup, (hud::setup_hud, fps::setup_fps_counter))
             .add_systems(
@@ -54,6 +50,10 @@ mod tests {
 
         app.update();
 
-        assert!(app.world().get_resource::<perf::PerfStats>().is_some());
+        assert!(
+            app.world()
+                .get_resource::<crate::perf::PerfStats>()
+                .is_some()
+        );
     }
 }

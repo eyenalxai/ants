@@ -7,6 +7,7 @@ pub mod constants;
 pub mod core;
 pub mod editor;
 pub mod overlays;
+pub mod perf;
 pub mod pheromone;
 pub mod simulation;
 pub mod ui;
