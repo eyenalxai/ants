@@ -1,7 +1,7 @@
 //! App wiring only: window/plugins, global resources and schedule sets.
 //!
 //! Feature behavior lives in the plugins under `simulation`, `pheromone`,
-//! `overlays`, `editor` and `ui`.
+//! `overlays`, `editor`, `ui` and `perf`.
 
 pub mod constants;
 pub mod core;
@@ -38,6 +38,7 @@ fn main() {
             overlays::OverlayPlugin,
             editor::EditorPlugin,
             ui::UiPlugin,
+            perf::PerfPlugin,
         ))
         // `Ui` writes `EditorMode` on button presses and the editor systems
         // read it (cursor visibility, run conditions), so `Ui` must run before
@@ -47,6 +48,5 @@ fn main() {
             Update,
             (GameSet::Overlay, GameSet::Ui, GameSet::Editor).chain(),
         )
-        .configure_sets(FixedUpdate, GameSet::Sim)
         .run();
 }

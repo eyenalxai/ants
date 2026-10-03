@@ -1,4 +1,4 @@
-//! HUD: buttons, pause control and FPS counter.
+//! HUD: buttons, pause control, colony stats and FPS counter.
 
 pub mod fps;
 pub mod hud;
@@ -7,14 +7,14 @@ pub mod widgets;
 use bevy::prelude::*;
 
 use crate::core::sets::{GameSet, Paused};
-use crate::perf::PerfPlugin;
 
+/// Owns the HUD systems, including the colony stats panel registered here so
+/// `simulation` does not depend on `ui`.
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PerfPlugin)
-            .init_resource::<Paused>()
+        app.init_resource::<Paused>()
             .add_systems(Startup, (hud::setup_hud, fps::setup_fps_counter))
             .add_systems(
                 Update,
@@ -25,6 +25,7 @@ impl Plugin for UiPlugin {
                     fps::fps_text_update_system,
                     fps::fps_perf_text_update_system,
                     fps::fps_counter_showhide,
+                    hud::update_colony_stats_hud,
                 )
                     .chain()
                     .in_set(GameSet::Ui),
@@ -37,15 +38,20 @@ mod tests {
     use super::*;
     use bevy::diagnostic::DiagnosticsStore;
 
-    /// `UiPlugin` owns `PerfPlugin`; a headless app must come up with the
-    /// counters registered and every UI system runnable.
+    /// `main.rs` adds `PerfPlugin` next to `UiPlugin`; a headless app must come
+    /// up with the counters registered and every UI system runnable, including
+    /// the colony stats panel that reads simulation resources.
     #[test]
-    fn ui_plugin_registers_perf_counters_headless() {
+    fn ui_plugin_boots_headless_with_perf_counters() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<crate::editor::EditorMode>()
+            .init_resource::<crate::simulation::ant::AntPopulation>()
+            .init_resource::<crate::simulation::colony::NestStore>()
+            .init_resource::<crate::simulation::colony::ColonyStats>()
             .insert_resource(ButtonInput::<KeyCode>::default())
             .insert_resource(DiagnosticsStore::default())
+            .add_plugins(crate::perf::PerfPlugin)
             .add_plugins(UiPlugin);
 
         app.update();

@@ -49,6 +49,32 @@ pub struct Ant {
     pub speed: f32,
     /// Completed food deliveries; boosts pheromone deposits.
     pub trips_completed: u32,
+    /// Nest-relative vector to the last food pickup (`None` until discovery).
+    /// Owner: navigation stream.
+    pub route_memory: Option<Vec2>,
+    /// Fixed path-integration angular error in radians. Owner: navigation.
+    pub pi_bias: f32,
+    /// Path-integration drift accumulated since the last nest visit, radians.
+    /// Owner: navigation.
+    pub pi_drift: f32,
+    /// Seconds since a trail was last sensed. Owner: navigation.
+    pub lost_time: f32,
+    /// Position at the start of the last movement step, so deposit can
+    /// reconstruct the real segment even after a wall bounce rewrote the
+    /// heading. Owner: pheromone stream.
+    pub prev_pos: Vec2,
+    /// Task-allocation response threshold. Owner: colony stream.
+    pub forage_threshold: f32,
+    /// Individual exploration multiplier. Owner: navigation/colony streams.
+    pub explore_tendency: f32,
+    /// Individual sensor gain. Owner: navigation stream.
+    pub sensor_gain: f32,
+    /// Individual crop capacity. Owner: colony stream.
+    pub crop_capacity: f32,
+    /// Quality of the currently carried load. Owner: pheromone stream.
+    pub carrying_quality: f32,
+    /// Seconds left resting after a delivery. Owner: colony stream.
+    pub rest_timer: f32,
 }
 
 impl Ant {
@@ -139,6 +165,17 @@ impl Ant {
             base_speed: ANT_SPEED,
             speed: 0.0,
             trips_completed: 0,
+            route_memory: None,
+            pi_bias: 0.0,
+            pi_drift: 0.0,
+            lost_time: 0.0,
+            prev_pos: Vec2::ZERO,
+            forage_threshold: 0.5,
+            explore_tendency: 1.0,
+            sensor_gain: 1.0,
+            crop_capacity: 1.0,
+            carrying_quality: 1.0,
+            rest_timer: 0.0,
         }
     }
 }
@@ -252,6 +289,17 @@ pub fn spawn_ants(
                 base_speed,
                 speed: 0.0,
                 trips_completed: 0,
+                route_memory: None,
+                pi_bias: 0.0,
+                pi_drift: 0.0,
+                lost_time: 0.0,
+                prev_pos: spawn_pos,
+                forage_threshold: 0.5,
+                explore_tendency: 1.0,
+                sensor_gain: 1.0,
+                crop_capacity: 1.0,
+                carrying_quality: 1.0,
+                rest_timer: 0.0,
             },
             AntRng(rng),
             Sprite {
@@ -492,18 +540,19 @@ mod tests {
     fn spawn_app(store_food: f32) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Time::<Fixed>::from_hz(64.0))
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
                 1.0 / 64.0,
             )))
-            .init_resource::<AntPopulation>()
-            .init_resource::<ColonyStats>()
-            .init_resource::<NestPosition>()
-            .insert_resource(NestStore { food: store_food })
+            .add_systems(FixedUpdate, spawn_ants);
+
+        crate::simulation::register_sim_resources(&mut app);
+
+        // Tests override the defaults after registration.
+        app.insert_resource(NestStore { food: store_food })
             .insert_resource(AntSpawner {
                 timer: Timer::from_seconds(0.01, TimerMode::Repeating),
-            })
-            .add_systems(FixedUpdate, spawn_ants);
+            });
+
         app
     }
 

@@ -24,7 +24,6 @@ use crate::simulation::Nest;
 use crate::simulation::SimulationPlugin;
 use crate::simulation::ant::{Ant, AntPopulation, AntSpawner};
 use crate::simulation::colony::ColonyStats;
-use crate::simulation::density::AntDensity;
 use crate::simulation::food::{self, FoodGrid};
 
 /// Corridor half-height in world units.
@@ -61,17 +60,6 @@ pub fn build_app(food: FoodSetup) -> App {
 
     app.add_plugins(MinimalPlugins)
         .add_plugins(PheromonePlugin)
-        .init_resource::<FoodGrid>()
-        .init_resource::<AntPopulation>()
-        .init_resource::<ColonyStats>()
-        .init_resource::<AntDensity>()
-        .insert_resource(AntSpawner {
-            timer: Timer::from_seconds(
-                crate::constants::ant::ANT_SPAWN_INTERVAL,
-                TimerMode::Repeating,
-            ),
-        })
-        .insert_resource(Time::<Fixed>::from_hz(64.0))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
             1.0 / 64.0,
         )));

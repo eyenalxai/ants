@@ -27,7 +27,7 @@ const CHAIN_SMOOTHING: f32 = 0.1;
 pub struct PerfEnabled(pub bool);
 
 impl PerfEnabled {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let enabled =
             std::env::var("ANTS_PERF").is_ok_and(|value| !value.is_empty() && value != "0");
 
@@ -113,7 +113,6 @@ fn perf_frame_time(mut stats: ResMut<PerfStats>, diagnostics: Option<Res<Diagnos
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::ant::ANT_SPAWN_INTERVAL;
     use crate::constants::world::{
         GRID_HEIGHT, GRID_WIDTH, NEST_X, NEST_Y, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH,
     };
@@ -121,8 +120,8 @@ mod tests {
     use crate::pheromone::PheromonePlugin;
     use crate::pheromone::grid::PheromoneGrid;
     use crate::simulation::Nest;
-    use crate::simulation::ant::{Ant, AntPhase, AntPopulation, AntSpawner};
-    use crate::simulation::{SimulationPlugin, colony, density, food};
+    use crate::simulation::ant::{Ant, AntPhase};
+    use crate::simulation::{SimulationPlugin, food};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 
@@ -147,14 +146,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(PheromonePlugin)
             .add_plugins(PerfPlugin)
-            .init_resource::<food::FoodGrid>()
-            .init_resource::<AntPopulation>()
-            .init_resource::<colony::ColonyStats>()
-            .init_resource::<density::AntDensity>()
             .init_resource::<SmokeTicks>()
-            .insert_resource(AntSpawner {
-                timer: Timer::from_seconds(ANT_SPAWN_INTERVAL, TimerMode::Repeating),
-            })
             .insert_resource(manual_time(1.0 / 64.0))
             .insert_resource(PerfEnabled(true))
             .add_systems(FixedUpdate, count_smoke_ticks)
