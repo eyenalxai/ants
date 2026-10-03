@@ -45,7 +45,7 @@ pub fn setup_pause_button(mut commands: Commands) {
         .with_child((
             Text::new("Pause"),
             TextFont {
-                font_size: UI_FONT_SIZE,
+                font_size: FontSize::Px(UI_FONT_SIZE),
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -73,7 +73,7 @@ pub fn setup_food_button(mut commands: Commands) {
         .with_child((
             Text::new("Food Mode"),
             TextFont {
-                font_size: UI_FONT_SIZE,
+                font_size: FontSize::Px(UI_FONT_SIZE),
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -101,7 +101,7 @@ pub fn setup_nest_button(mut commands: Commands) {
         .with_child((
             Text::new("Nest Mode"),
             TextFont {
-                font_size: UI_FONT_SIZE,
+                font_size: FontSize::Px(UI_FONT_SIZE),
                 ..default()
             },
             TextColor(Color::WHITE),

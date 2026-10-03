@@ -32,7 +32,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
             FpsText,
             Text::new("FPS: "),
             TextFont {
-                font_size: UI_FONT_SIZE,
+                font_size: FontSize::Px(UI_FONT_SIZE),
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -41,7 +41,7 @@ pub fn setup_fps_counter(mut commands: Commands) {
         .with_child((
             TextSpan::new(" N/A"),
             TextFont {
-                font_size: UI_FONT_SIZE,
+                font_size: FontSize::Px(UI_FONT_SIZE),
                 ..default()
             },
             TextColor(Color::WHITE),

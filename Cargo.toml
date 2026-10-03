@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.17.2" }
-fastrand = "2.3.0"
-# Bevy pulls `log` in transitively; these features cap runtime log levels:
-# debug and below in dev builds, warn and below in release builds.
+bevy = { version = "0.19.1" }
+fastrand = "2.5.0"
+# Bevy logs via `tracing`, but `bevy_log` installs `tracing_log::LogTracer` to
+# bridge `log` records into its subscriber. These features therefore still cap
+# the global `log` crate used by dependencies: debug and below in dev builds,
+# warn and below in release builds. Bevy's own tracing logs are filtered by
+# `LogPlugin`/`RUST_LOG`, not by these features.
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 
 [features]
