@@ -685,6 +685,13 @@ fn density_cell(pos: Vec2) -> usize {
 /// so movement, collision and deposit skip it; [`carry_corpses`] walks it to
 /// the refuse pile.
 ///
+/// Corpses already inside the refuse drop radius are excluded from the index:
+/// they are disposed. Without the exclusion, an ant passing the pile picks one
+/// up, [`carry_corpses`] sees it is already within [`CORPSE_DROP_RADIUS`] and
+/// drops it again on the very next tick, and the pick-up/drop loop inflates
+/// [`ColonyStats::refuse`] forever while keeping ants busy at the pile instead
+/// of foraging.
+///
 /// The index is rebuilt once per tick in a fixed order, so the pass is
 /// O(ants + corpses) instead of O(ants * corpses). Claimed corpses are removed
 /// from the index immediately, preserving the "one corpse per ant, one ant per
@@ -694,12 +701,17 @@ pub(crate) fn pick_up_corpses(
     mut commands: Commands,
     mut ant_query: Query<(&mut Ant, &Transform)>,
     corpse_query: Query<(Entity, &Transform), With<Corpse>>,
+    geometry: Res<NestGeometry>,
     mut grid: Local<CorpseGrid>,
 ) {
+    let refuse = geometry.refuse;
+    let drop_squared = CORPSE_DROP_RADIUS * CORPSE_DROP_RADIUS;
+
     grid.rebuild(
         corpse_query
             .iter()
-            .map(|(entity, transform)| (entity, transform.translation.truncate())),
+            .map(|(entity, transform)| (entity, transform.translation.truncate()))
+            .filter(|(_, pos)| pos.distance_squared(refuse) > drop_squared),
     );
 
     if grid.is_empty() {
@@ -1518,6 +1530,71 @@ mod tests {
         let corpses = corpse_positions(&mut world);
         assert_eq!(corpses.len(), 1, "the corpse reappears at the refuse pile");
         assert!(corpses[0].distance(refuse) <= CORPSE_DROP_RADIUS + 1e-3);
+
+        // The dropped corpse is disposed at the pile: further ticks of the
+        // full pickup/carry pair must not re-pick or re-drop it.
+        for _ in 0..(64 * 10) {
+            step(&mut world, DT);
+            world.run_system_once(pick_up_corpses).unwrap();
+            world.run_system_once(carry_corpses).unwrap();
+        }
+
+        assert!(
+            !world.get::<Ant>(ant_entity).unwrap().carrying_corpse,
+            "the disposed corpse must never be picked up again"
+        );
+        assert_eq!(
+            world.resource::<ColonyStats>().refuse,
+            1,
+            "the pick-up/drop loop must not inflate the refuse counter"
+        );
+        assert_eq!(corpse_positions(&mut world).len(), 1);
+    }
+
+    /// A corpse sitting at the refuse pile is disposed; an ant standing on it
+    /// must not start the endless pick-up/drop loop that inflated
+    /// `ColonyStats::refuse` in the GUI run.
+    #[test]
+    fn corpses_at_the_refuse_pile_are_never_re_picked() {
+        let mut world = base_world();
+        let refuse = Vec2::new(50.0, 0.0);
+        world.insert_resource(NestGeometry {
+            entrance: Vec2::ZERO,
+            entrance_radius: NEST_RADIUS,
+            refuse,
+        });
+
+        world.spawn((
+            Corpse { ttl: CORPSE_TTL },
+            Transform::from_xyz(refuse.x, refuse.y, 0.0),
+        ));
+        let ant_entity = world
+            .spawn((
+                Ant::test_ant(0.0),
+                Transform::from_xyz(refuse.x, refuse.y, 0.0),
+            ))
+            .id();
+
+        for _ in 0..(64 * 10) {
+            step(&mut world, DT);
+            world.run_system_once(pick_up_corpses).unwrap();
+            world.run_system_once(carry_corpses).unwrap();
+        }
+
+        assert!(
+            !world.get::<Ant>(ant_entity).unwrap().carrying_corpse,
+            "an ant on the refuse pile must not pick a disposed corpse up"
+        );
+        assert_eq!(
+            world.resource::<ColonyStats>().refuse,
+            0,
+            "a disposed corpse must never count as a refuse delivery"
+        );
+        assert_eq!(
+            corpse_positions(&mut world).len(),
+            1,
+            "the corpse must stay where it is"
+        );
     }
 
     #[test]
