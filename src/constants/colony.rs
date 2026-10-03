@@ -1,9 +1,10 @@
-//! Colony food-economy tunables: the nest store, metered refill, nurse upkeep
-//! and the recruitment gate.
+//! Colony food-economy tunables: the nest store, metered refill, nurse upkeep,
+//! the recruitment gate and the queen/brood food costs.
 //!
-//! The store closes the foraging loop: deliveries are the only income, refills
-//! and nursing are the only expenses. A colony that stops foraging drains the
-//! store, recruitment closes and the population shrinks.
+//! The store closes the foraging loop: deliveries are the only income, refills,
+//! nursing, egg laying and larval feeding are the only expenses. A colony that
+//! stops foraging drains the store, recruitment closes and the population
+//! shrinks.
 
 /// Maximum food held by the nest store. Deliveries beyond the cap are still
 /// counted in [`crate::simulation::colony::ColonyStats`], they just overflow.
@@ -29,6 +30,28 @@ pub const NURSE_UPKEEP_PER_ANT: f32 = 0.0015;
 /// Store level at which recruitment is fully open. Below it the spawn batch is
 /// scaled linearly with the store; at zero the colony stops recruiting.
 pub const RECRUIT_THRESHOLD: f32 = 25.0;
+
+// --- Queen and brood economy (F8) ---------------------------------------------
+//
+// The queen replaces the old direct adult recruitment: she lays eggs while the
+// store is above [`QUEEN_LAYING_THRESHOLD`], each egg costs [`EGG_FOOD_COST`]
+// at laying and each larva draws [`LARVA_FOOD_PER_SEC`] from the store while it
+// grows. Pupae need no food.
+
+/// Eggs the queen lays per second at full activity and a fully open store.
+pub const QUEEN_EGG_RATE: f32 = 4.0;
+/// Store level above which the queen lays at all. Below it the colony is
+/// starving and reproduction stops.
+pub const QUEEN_LAYING_THRESHOLD: f32 = RECRUIT_THRESHOLD;
+/// Store level at which the queen reaches her full [`QUEEN_EGG_RATE`]. Between
+/// the threshold and this level the rate scales linearly with the store, so a
+/// lean colony lays fewer eggs instead of none.
+pub const QUEEN_LAYING_FULL_STORE: f32 = 100.0;
+/// Food spent from the nest store to lay one egg.
+pub const EGG_FOOD_COST: f32 = 0.05;
+/// Food a larva consumes per second. A larva whose payment the store cannot
+/// cover stalls until food returns.
+pub const LARVA_FOOD_PER_SEC: f32 = 0.02;
 
 // --- Individual variation (F7) -------------------------------------------------
 //

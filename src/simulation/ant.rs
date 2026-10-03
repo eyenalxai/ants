@@ -6,17 +6,17 @@ use std::f32::consts::PI;
 
 use crate::constants::ant::*;
 use crate::constants::colony::{
-    CROP_CAPACITY_MAX, CROP_CAPACITY_MIN, ENERGY_FULL_EPS, ENERGY_REFILL_COST, ENERGY_REFILL_RATE,
-    EXPLORE_TENDENCY_MAX, EXPLORE_TENDENCY_MIN, FORAGE_THRESHOLD_MAX, FORAGE_THRESHOLD_MIN,
-    NURSE_UPKEEP_PER_ANT, PI_BIAS_MAX_DEG, PI_BIAS_MIN_DEG, RECRUIT_THRESHOLD, SENSOR_GAIN_MAX,
+    CROP_CAPACITY_MAX, CROP_CAPACITY_MIN, EGG_FOOD_COST, ENERGY_FULL_EPS, ENERGY_REFILL_COST,
+    ENERGY_REFILL_RATE, EXPLORE_TENDENCY_MAX, EXPLORE_TENDENCY_MIN, FORAGE_THRESHOLD_MAX,
+    FORAGE_THRESHOLD_MIN, NURSE_UPKEEP_PER_ANT, PI_BIAS_MAX_DEG, PI_BIAS_MIN_DEG, SENSOR_GAIN_MAX,
     SENSOR_GAIN_MIN,
 };
 use crate::constants::world::NEST_RADIUS;
 use crate::core::layers::Z_ANT;
 use crate::simulation::NestPosition;
 use crate::simulation::colony::{ColonyStats, NestStore};
-use crate::simulation::lifecycle::spawn_corpse;
-use crate::simulation::nest::NestGeometry;
+use crate::simulation::environment::SimClock;
+use crate::simulation::lifecycle::{Brood, BroodStage, Queen, spawn_brood, spawn_corpse};
 
 /// Behavioral phase of an ant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -312,102 +312,60 @@ impl AntRng {
     }
 }
 
+/// Drives the queen's egg-laying cadence (one laying window per timer fire).
+///
+/// Headless harnesses stop recruitment by stretching this timer, which is why
+/// the laying pass still lives behind it.
 #[derive(Resource)]
 pub struct AntSpawner {
     pub timer: Timer,
 }
 
-/// Batch size for one spawn interval: the population ramp and delivery boost
-/// scaled by the store gate `clamp(store / RECRUIT_THRESHOLD, 0, 1)`, clamped
-/// to the remaining capacity. There is deliberately no `.max(1)` floor: with
-/// an empty store the colony stops recruiting and the population shrinks.
-pub fn recruitment_batch(
-    ramp: f32,
-    delivery_boost: f32,
-    store_food: f32,
-    capacity: usize,
-) -> usize {
-    let gate = (store_food / RECRUIT_THRESHOLD).clamp(0.0, 1.0);
-    ((ANT_BATCH_SIZE as f32 * ramp * delivery_boost * gate) as usize).min(capacity)
-}
+/// Spawn one callow worker at the nest entrance from the deterministic stream
+/// `spawn_index`, exactly as the historical direct spawn did.
+///
+/// Every draw (heading, spawn position, lifetime/speed variation and the F7
+/// individual variation) comes from [`AntRng::for_spawn`], so the per-ant
+/// fields and the ant's own subsequent RNG stream are identical no matter who
+/// calls this: the founding cohort, an eclosing pupa, or a test.
+pub(crate) fn spawn_worker(
+    commands: &mut Commands,
+    spawn_index: u64,
+    entrance: Vec2,
+    entrance_radius: f32,
+    nest_pos: Vec2,
+) -> Entity {
+    // Every draw for this ant comes from its own seeded stream, so the whole
+    // spawn is reproducible.
+    let mut rng = AntRng::for_spawn(spawn_index).0;
 
-/// Read-only world inputs of the spawn ramp, bundled to keep the system
-/// signature small.
-#[derive(SystemParam)]
-pub struct SpawnInputs<'w> {
-    colony: Res<'w, ColonyStats>,
-    nest_store: Res<'w, NestStore>,
-    nest_position: Res<'w, NestPosition>,
-    nest_geometry: Res<'w, NestGeometry>,
-}
+    let heading = rng.f32() * 2.0 * PI;
+    let spawn_angle = rng.f32() * 2.0 * PI;
+    // sqrt keeps the spawn distribution uniform over the entrance disc.
+    let spawn_radius = entrance_radius.max(0.0) * rng.f32().sqrt();
+    let spawn_pos = entrance + Vec2::new(spawn_angle.cos(), spawn_angle.sin()) * spawn_radius;
+    let max_lifetime = ANT_LIFETIME * (ANT_LIFETIME_VARIATION_MIN + rng.f32());
+    let base_speed = ANT_SPEED * (ANT_SPEED_VARIATION_MIN + rng.f32());
 
-/// Spawn new nurses at a ramped rate: slower near the population cap, faster
-/// after recent food deliveries, and only while the nest store can pay for
-/// them. [`MAX_ANTS`] stays a hard safety cap.
-pub fn spawn_ants(
-    mut commands: Commands,
-    mut spawner: ResMut<AntSpawner>,
-    mut population: ResMut<AntPopulation>,
-    inputs: SpawnInputs,
-    time: Res<Time<Fixed>>,
-    mut spawn_counter: Local<u64>,
-) {
-    spawner.timer.tick(time.delta());
+    // Individual variation (F7), drawn from the same seeded stream. The
+    // ranges are documented in `constants/colony.rs`:
+    //   pi_bias          ±(5..10) degrees, fixed path-integration error
+    //   explore_tendency 0.5..1.5, scales the exploration chance
+    //   sensor_gain      0.7..1.3, scales sensor readings
+    //   forage_threshold 0.3..0.9, task-allocation response threshold
+    //   crop_capacity    0.8..1.2, load a full crop can hold
+    let pi_bias_sign = if rng.f32() < 0.5 { -1.0 } else { 1.0 };
+    let pi_bias_deg = PI_BIAS_MIN_DEG + rng.f32() * (PI_BIAS_MAX_DEG - PI_BIAS_MIN_DEG);
+    let pi_bias = pi_bias_sign * pi_bias_deg.to_radians();
+    let explore_tendency =
+        EXPLORE_TENDENCY_MIN + rng.f32() * (EXPLORE_TENDENCY_MAX - EXPLORE_TENDENCY_MIN);
+    let sensor_gain = SENSOR_GAIN_MIN + rng.f32() * (SENSOR_GAIN_MAX - SENSOR_GAIN_MIN);
+    let forage_threshold =
+        FORAGE_THRESHOLD_MIN + rng.f32() * (FORAGE_THRESHOLD_MAX - FORAGE_THRESHOLD_MIN);
+    let crop_capacity = CROP_CAPACITY_MIN + rng.f32() * (CROP_CAPACITY_MAX - CROP_CAPACITY_MIN);
 
-    if !spawner.timer.just_finished() {
-        return;
-    }
-
-    let capacity = MAX_ANTS.saturating_sub(population.count());
-    if capacity == 0 {
-        return;
-    }
-
-    let nest_pos = inputs.nest_position.0;
-    let entrance = inputs.nest_geometry.entrance;
-    let entrance_radius = inputs.nest_geometry.entrance_radius.max(0.0);
-    let ramp = (1.0 - population.count() as f32 / MAX_ANTS as f32).clamp(0.0, 1.0);
-    let batch_size = recruitment_batch(
-        ramp,
-        inputs.colony.delivery_boost(),
-        inputs.nest_store.food(),
-        capacity,
-    );
-
-    for _ in 0..batch_size {
-        let spawn_index = spawn_counter.wrapping_add(1);
-        *spawn_counter = spawn_index;
-
-        // Every draw for this ant comes from its own seeded stream, so the
-        // whole spawn is reproducible.
-        let mut rng = AntRng::for_spawn(spawn_index).0;
-
-        let heading = rng.f32() * 2.0 * PI;
-        let spawn_angle = rng.f32() * 2.0 * PI;
-        // sqrt keeps the spawn distribution uniform over the entrance disc.
-        let spawn_radius = entrance_radius * rng.f32().sqrt();
-        let spawn_pos = entrance + Vec2::new(spawn_angle.cos(), spawn_angle.sin()) * spawn_radius;
-        let max_lifetime = ANT_LIFETIME * (ANT_LIFETIME_VARIATION_MIN + rng.f32());
-        let base_speed = ANT_SPEED * (ANT_SPEED_VARIATION_MIN + rng.f32());
-
-        // Individual variation (F7), drawn from the same seeded stream. The
-        // ranges are documented in `constants/colony.rs`:
-        //   pi_bias          ±(5..10) degrees, fixed path-integration error
-        //   explore_tendency 0.5..1.5, scales the exploration chance
-        //   sensor_gain      0.7..1.3, scales sensor readings
-        //   forage_threshold 0.3..0.9, task-allocation response threshold
-        //   crop_capacity    0.8..1.2, load a full crop can hold
-        let pi_bias_sign = if rng.f32() < 0.5 { -1.0 } else { 1.0 };
-        let pi_bias_deg = PI_BIAS_MIN_DEG + rng.f32() * (PI_BIAS_MAX_DEG - PI_BIAS_MIN_DEG);
-        let pi_bias = pi_bias_sign * pi_bias_deg.to_radians();
-        let explore_tendency =
-            EXPLORE_TENDENCY_MIN + rng.f32() * (EXPLORE_TENDENCY_MAX - EXPLORE_TENDENCY_MIN);
-        let sensor_gain = SENSOR_GAIN_MIN + rng.f32() * (SENSOR_GAIN_MAX - SENSOR_GAIN_MIN);
-        let forage_threshold =
-            FORAGE_THRESHOLD_MIN + rng.f32() * (FORAGE_THRESHOLD_MAX - FORAGE_THRESHOLD_MIN);
-        let crop_capacity = CROP_CAPACITY_MIN + rng.f32() * (CROP_CAPACITY_MAX - CROP_CAPACITY_MIN);
-
-        commands.spawn((
+    commands
+        .spawn((
             Ant {
                 direction: heading,
                 has_food: false,
@@ -441,11 +399,70 @@ pub fn spawn_ants(
                 ..default()
             },
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, Z_ANT),
-        ));
+        ))
+        .id()
+}
+
+/// Read-only world inputs of the queen's laying pass, bundled to keep the
+/// system signature small.
+#[derive(SystemParam)]
+pub struct LayingInputs<'w, 's> {
+    population: Res<'w, AntPopulation>,
+    brood: Query<'w, 's, &'static Brood>,
+    nest_position: Res<'w, NestPosition>,
+    clock: Res<'w, SimClock>,
+}
+
+/// Queen egg-laying pass (registered as `spawn_ants` in [`SimSet::Spawn`] by
+/// `simulation/mod.rs`, which this stream does not own).
+///
+/// This replaces the old direct adult recruitment. While the nest store is
+/// above [`crate::constants::colony::QUEEN_LAYING_THRESHOLD`] the queen lays
+/// [`Queen::lay_rate`] eggs per second (deterministic accumulator), each
+/// costing [`EGG_FOOD_COST`] from the store and capped by [`MAX_ANTS`]
+/// including the brood already in the pipeline. Adults only come out of
+/// [`crate::simulation::lifecycle::develop_brood`] now.
+///
+/// The [`AntSpawner`] timer is the laying cadence; the eggs are placed on the
+/// deterministic brood spiral around the nest centre, so this pass needs no
+/// RNG of its own.
+pub fn queen_lays_eggs(
+    mut commands: Commands,
+    mut spawner: ResMut<AntSpawner>,
+    mut queen: ResMut<Queen>,
+    mut nest_store: ResMut<NestStore>,
+    inputs: LayingInputs,
+    time: Res<Time<Fixed>>,
+) {
+    spawner.timer.tick(time.delta());
+
+    if !spawner.timer.just_finished() {
+        return;
     }
 
-    population.add(batch_size);
+    let capacity = MAX_ANTS.saturating_sub(inputs.population.count() + inputs.brood.iter().count());
+
+    if capacity == 0 {
+        return;
+    }
+
+    let rate = queen.lay_rate(inputs.clock.activity, nest_store.food());
+    let window = spawner.timer.duration().as_secs_f32();
+    let affordable = (nest_store.food() / EGG_FOOD_COST) as usize;
+    let eggs = queen.take_eggs(rate, window).min(capacity).min(affordable);
+    let nest_pos = inputs.nest_position.0;
+
+    for _ in 0..eggs {
+        let index = queen.next_spawn_index();
+        spawn_brood(&mut commands, BroodStage::Egg, index, nest_pos);
+        nest_store.spend(EGG_FOOD_COST);
+    }
 }
+
+/// Wiring alias: the integration stream registers this pass as
+/// `ant::spawn_ants` in `SimSet::Spawn`, and this stream does not own
+/// `simulation/mod.rs`.
+pub use self::queen_lays_eggs as spawn_ants;
 
 /// Advance age, handling pauses, rest and energy; replace ants that die of old
 /// age or exhaustion with a [`crate::simulation::lifecycle::Corpse`], and
@@ -512,6 +529,7 @@ pub fn update_ant_energy_age(
 mod tests {
     use super::*;
     use crate::constants::colony::NEST_STORE_CAP;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 
@@ -786,41 +804,16 @@ mod tests {
         assert!(ant.nursing_over());
     }
 
-    #[test]
-    fn recruitment_gate_scales_with_the_store_and_stops_when_empty() {
-        let capacity = MAX_ANTS;
-
-        assert_eq!(
-            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD, capacity),
-            ANT_BATCH_SIZE
-        );
-        assert_eq!(
-            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD / 2.0, capacity),
-            ANT_BATCH_SIZE / 2
-        );
-        assert_eq!(
-            recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD * 10.0, capacity),
-            ANT_BATCH_SIZE,
-            "a full store must not over-spawn"
-        );
-        assert_eq!(
-            recruitment_batch(1.0, 1.0, 0.0, capacity),
-            0,
-            "an empty store stops recruitment entirely"
-        );
-        assert_eq!(recruitment_batch(1.0, 1.0, RECRUIT_THRESHOLD, 7), 7);
-        assert_eq!(recruitment_batch(0.0, 2.5, RECRUIT_THRESHOLD, capacity), 0);
-    }
-
-    fn spawn_app(store_food: f32) -> App {
+    fn laying_app(store_food: f32) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
                 1.0 / 64.0,
             )))
-            .add_systems(FixedUpdate, spawn_ants);
+            .add_systems(FixedUpdate, queen_lays_eggs);
 
         crate::simulation::register_sim_resources(&mut app);
+        app.init_resource::<Queen>();
 
         // Tests override the defaults after registration.
         app.insert_resource(NestStore::with_food(store_food))
@@ -831,41 +824,82 @@ mod tests {
         app
     }
 
-    #[test]
-    fn spawn_ants_keeps_population_exact_and_gated_by_the_store() {
-        let mut stocked = spawn_app(NEST_STORE_CAP);
-        // The first frame only primes the virtual clock; the fixed step runs
-        // on the second update.
-        stocked.update();
-        stocked.update();
+    fn brood_count(app: &mut App) -> usize {
+        let mut query = app.world_mut().query::<&Brood>();
+        query.iter(app.world()).count()
+    }
 
-        let mut query = stocked.world_mut().query::<&Ant>();
-        let spawned = query.iter(stocked.world()).count();
-        assert!(spawned > 0, "a stocked colony must recruit");
+    /// The queen lays brood (not adults) only while the store is above the
+    /// laying threshold, and each egg is paid for from the store.
+    #[test]
+    fn queen_lays_eggs_only_above_the_store_threshold_and_pays_for_them() {
+        let mut stocked = laying_app(NEST_STORE_CAP);
+        // Enough fixed steps for the fractional accumulator to produce eggs.
+        for _ in 0..64 {
+            stocked.update();
+        }
+
+        let brood = brood_count(&mut stocked);
+        assert!(brood > 0, "a stocked colony must lay brood");
         assert_eq!(
-            spawned,
             stocked.world().resource::<AntPopulation>().count(),
-            "AntPopulation must stay exact"
+            0,
+            "laying must not create adults directly"
+        );
+        let expected = NEST_STORE_CAP - brood as f32 * EGG_FOOD_COST;
+        assert!(
+            (stocked.world().resource::<NestStore>().food() - expected).abs() < 1e-3,
+            "each egg must cost {EGG_FOOD_COST} from the store"
         );
 
-        let mut starving = spawn_app(0.0);
-        starving.update();
-        starving.update();
-        assert_eq!(starving.world().resource::<AntPopulation>().count(), 0);
-        let mut query = starving.world_mut().query::<&Ant>();
-        assert_eq!(query.iter(starving.world()).count(), 0);
+        let mut starving = laying_app(0.0);
+        for _ in 0..64 {
+            starving.update();
+        }
+        assert_eq!(brood_count(&mut starving), 0, "an empty store stops laying");
+    }
+
+    /// Laying respects the brood pipeline capacity: eggs already in the
+    /// pipeline count against `MAX_ANTS`.
+    #[test]
+    fn queen_laying_is_capped_by_the_remaining_pipeline_capacity() {
+        let mut app = laying_app(NEST_STORE_CAP);
+        // Leave room for exactly one more brood item.
+        let existing = MAX_ANTS - 1;
+        for _ in 0..existing {
+            app.world_mut().spawn(Brood {
+                stage: BroodStage::Egg,
+                timer: 0.0,
+                spawn_index: 0,
+            });
+        }
+
+        for _ in 0..64 {
+            app.update();
+        }
+
+        assert_eq!(brood_count(&mut app), MAX_ANTS);
     }
 
     #[test]
-    fn spawn_variation_is_within_the_documented_ranges() {
-        let mut app = spawn_app(NEST_STORE_CAP);
-        app.update();
-        app.update();
+    fn spawn_worker_variation_is_within_the_documented_ranges() {
+        fn spawn_batch() -> World {
+            let mut world = World::new();
+            world
+                .run_system_once(move |mut commands: Commands| {
+                    for index in 1..=ANT_BATCH_SIZE as u64 {
+                        spawn_worker(&mut commands, index, Vec2::ZERO, NEST_RADIUS, Vec2::ZERO);
+                    }
+                })
+                .unwrap();
+            world
+        }
 
+        let mut world = spawn_batch();
         let mut count = 0;
-        let mut query = app.world_mut().query::<&Ant>();
+        let mut query = world.query::<&Ant>();
 
-        for ant in query.iter(app.world()) {
+        for ant in query.iter(&world) {
             let bias_deg = ant.pi_bias.to_degrees().abs();
             assert!(
                 (PI_BIAS_MIN_DEG..=PI_BIAS_MAX_DEG).contains(&bias_deg),
@@ -894,17 +928,12 @@ mod tests {
             count += 1;
         }
 
-        assert!(
-            count >= ANT_BATCH_SIZE,
-            "expected a full first batch, got {count}"
-        );
+        assert_eq!(count, ANT_BATCH_SIZE, "expected one full worker batch");
 
         // Two spawns of the same stream are bit-identical.
-        let mut replay = spawn_app(NEST_STORE_CAP);
-        replay.update();
-        replay.update();
+        let mut replay = spawn_batch();
         let mut first: Vec<(f32, f32, f32, f32, f32)> = query
-            .iter(app.world())
+            .iter(&world)
             .map(|ant| {
                 (
                     ant.pi_bias,
@@ -915,9 +944,9 @@ mod tests {
                 )
             })
             .collect();
-        let mut query = replay.world_mut().query::<&Ant>();
+        let mut query = replay.query::<&Ant>();
         let mut second: Vec<(f32, f32, f32, f32, f32)> = query
-            .iter(replay.world())
+            .iter(&replay)
             .map(|ant| {
                 (
                     ant.pi_bias,

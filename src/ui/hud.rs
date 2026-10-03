@@ -12,7 +12,7 @@ use crate::core::sets::Paused;
 use crate::editor::{EditorMode, EditorModeKind, toggled_mode};
 use crate::simulation::ant::AntPopulation;
 use crate::simulation::colony::{ColonyStats, NestStore};
-use crate::simulation::lifecycle::Corpse;
+use crate::simulation::lifecycle::{Brood, BroodStage, Corpse, Queen};
 use crate::ui::widgets::{self, ButtonAction, ButtonActiveWhen, ToolButton};
 
 /// Top offset of the colony stats panel as a percentage, just below the
@@ -23,8 +23,7 @@ const UI_STATS_FONT_SIZE: f32 = 14.0;
 /// Text color of the colony stats panel.
 const UI_STATS_TEXT_COLOR: Color = Color::srgba(0.85, 0.85, 0.85, 1.0);
 /// Initial text of the colony stats panel, replaced on the first update.
-const COLONY_STATS_PLACEHOLDER: &str =
-    "ants -   nest food -\ndelivery -/s   total -\ndeaths -   corpses -   refuse -";
+const COLONY_STATS_PLACEHOLDER: &str = "ants -   nest food -\ndelivery -/s   total -\nbrood eggs -   larvae -   pupae -\nqueen -   deaths -   corpses -   refuse -";
 
 /// Marker for the "PAUSED" overlay root.
 #[derive(Component)]
@@ -33,6 +32,14 @@ pub struct PausedIndicator;
 /// Marker for the colony stats text entity.
 #[derive(Component)]
 pub struct ColonyStatsText;
+
+/// Live brood entity counts per developmental stage.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+struct BroodCounts {
+    eggs: u32,
+    larvae: u32,
+    pupae: u32,
+}
 
 /// Last displayed colony snapshot, quantized to the precision actually shown.
 /// The text is only rewritten when one of these values changes, so a stable
@@ -46,11 +53,16 @@ pub struct ColonyStatsCache {
     deaths: u32,
     corpses: u32,
     refuse: u32,
+    eggs: u32,
+    larvae: u32,
+    pupae: u32,
+    laying: bool,
 }
 
 impl ColonyStatsCache {
     /// Quantize the live values to what the panel displays: whole ants and
     /// food, delivery rate to one decimal per second.
+    #[allow(clippy::too_many_arguments)]
     fn capture(
         population: usize,
         store: f32,
@@ -59,6 +71,8 @@ impl ColonyStatsCache {
         deaths: u32,
         corpses: u32,
         refuse: u32,
+        brood: BroodCounts,
+        laying: bool,
     ) -> Self {
         Self {
             population,
@@ -68,17 +82,25 @@ impl ColonyStatsCache {
             deaths,
             corpses,
             refuse,
+            eggs: brood.eggs,
+            larvae: brood.larvae,
+            pupae: brood.pupae,
+            laying,
         }
     }
 
     /// Panel text for this snapshot.
     fn render(&self) -> String {
         format!(
-            "ants {}   nest food {}\ndelivery {:.1}/s   total {}\ndeaths {}   corpses {}   refuse {}",
+            "ants {}   nest food {}\ndelivery {:.1}/s   total {}\nbrood eggs {}   larvae {}   pupae {}\nqueen {}   deaths {}   corpses {}   refuse {}",
             self.population,
             self.store,
             self.rate_tenths as f32 / 10.0,
             self.total,
+            self.eggs,
+            self.larvae,
+            self.pupae,
+            if self.laying { "laying" } else { "idle" },
             self.deaths,
             self.corpses,
             self.refuse,
@@ -86,21 +108,36 @@ impl ColonyStatsCache {
     }
 }
 
-/// Keep the colony stats panel in sync with the food economy and the
-/// mortality bookkeeping.
+/// Keep the colony stats panel in sync with the food economy, the brood
+/// pipeline and the mortality bookkeeping.
 ///
-/// Runs in `Update`; the fixed-step chain only mutates the resources, so while
-/// the colony is paused or stable the cached snapshot matches and the text is
-/// left untouched. The corpse count is a direct entity count (no extra
-/// counter to drift).
+/// Runs in `Update`; the fixed-step chain only mutates the resources and the
+/// entities, so while the colony is paused or stable the cached snapshot
+/// matches and the text is left untouched. The corpse and brood counts are
+/// direct entity counts (no extra counters to drift). `Queen` is optional so
+/// a bare UI-only app (no simulation plugin) still boots with the queen shown
+/// as idle.
 pub fn update_colony_stats_hud(
     population: Res<AntPopulation>,
     store: Res<NestStore>,
     colony: Res<ColonyStats>,
+    queen: Option<Res<Queen>>,
     corpses: Query<&Corpse>,
+    brood: Query<&Brood>,
     mut text_query: Query<(&mut Text, &mut ColonyStatsCache), With<ColonyStatsText>>,
 ) {
     let corpse_count = corpses.iter().count() as u32;
+    let mut brood_counts = BroodCounts::default();
+
+    for item in &brood {
+        match item.stage {
+            BroodStage::Egg => brood_counts.eggs += 1,
+            BroodStage::Larva => brood_counts.larvae += 1,
+            BroodStage::Pupa => brood_counts.pupae += 1,
+        }
+    }
+
+    let laying = queen.is_some_and(|queen| queen.is_laying(store.food()));
 
     for (mut text, mut cache) in &mut text_query {
         let snapshot = ColonyStatsCache::capture(
@@ -111,6 +148,8 @@ pub fn update_colony_stats_hud(
             colony.deaths,
             corpse_count,
             colony.refuse,
+            brood_counts,
+            laying,
         );
 
         if *cache == snapshot {
@@ -284,44 +323,67 @@ mod tests {
 
     #[test]
     fn stats_cache_quantizes_to_what_is_displayed() {
-        let base = ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 1);
+        let no_brood = BroodCounts::default();
+        let base = ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 1, no_brood, true);
         assert_eq!(
             base,
-            ColonyStatsCache::capture(100, 150.1, 2.01, 10.1, 3, 2, 1)
+            ColonyStatsCache::capture(100, 150.1, 2.01, 10.1, 3, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(101, 150.4, 2.04, 10.4, 3, 2, 1)
+            ColonyStatsCache::capture(101, 150.4, 2.04, 10.4, 3, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.6, 2.04, 10.4, 3, 2, 1)
+            ColonyStatsCache::capture(100, 150.6, 2.04, 10.4, 3, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.4, 2.06, 10.4, 3, 2, 1)
+            ColonyStatsCache::capture(100, 150.4, 2.06, 10.4, 3, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.4, 2.04, 10.6, 3, 2, 1)
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.6, 3, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 4, 2, 1)
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 4, 2, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 3, 1)
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 3, 1, no_brood, true)
         );
         assert_ne!(
             base,
-            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 2)
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 2, no_brood, true)
+        );
+
+        let brood = BroodCounts {
+            eggs: 4,
+            larvae: 5,
+            pupae: 6,
+        };
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 1, brood, true),
+            "brood counts must be part of the snapshot"
+        );
+        assert_ne!(
+            base,
+            ColonyStatsCache::capture(100, 150.4, 2.04, 10.4, 3, 2, 1, no_brood, false),
+            "the queen state must be part of the snapshot"
         );
     }
 
     #[test]
-    fn stats_cache_renders_economy_and_mortality() {
-        let text = ColonyStatsCache::capture(1234, 812.4, 12.34, 4567.0, 5, 3, 2).render();
+    fn stats_cache_renders_economy_mortality_and_brood() {
+        let brood = BroodCounts {
+            eggs: 3,
+            larvae: 2,
+            pupae: 1,
+        };
+        let text =
+            ColonyStatsCache::capture(1234, 812.4, 12.34, 4567.0, 5, 3, 2, brood, true).render();
         assert!(text.contains("ants 1234"), "{text}");
         assert!(text.contains("nest food 812"), "{text}");
         assert!(text.contains("delivery 12.3/s"), "{text}");
@@ -329,6 +391,13 @@ mod tests {
         assert!(text.contains("deaths 5"), "{text}");
         assert!(text.contains("corpses 3"), "{text}");
         assert!(text.contains("refuse 2"), "{text}");
+        assert!(text.contains("brood eggs 3   larvae 2   pupae 1"), "{text}");
+        assert!(text.contains("queen laying"), "{text}");
+
+        let idle =
+            ColonyStatsCache::capture(1, 0.0, 0.0, 0.0, 0, 0, 0, BroodCounts::default(), false)
+                .render();
+        assert!(idle.contains("queen idle"), "{idle}");
     }
 
     #[test]
@@ -337,6 +406,7 @@ mod tests {
         world.init_resource::<AntPopulation>();
         world.init_resource::<NestStore>();
         world.init_resource::<ColonyStats>();
+        world.init_resource::<Queen>();
         world.run_system_once(setup_hud).unwrap();
 
         world.resource_mut::<AntPopulation>().add(1234);
@@ -348,6 +418,19 @@ mod tests {
         }
         world.spawn((Corpse { ttl: 10.0 }, Transform::from_xyz(0.0, 0.0, 0.0)));
         world.spawn((Corpse { ttl: 10.0 }, Transform::from_xyz(1.0, 0.0, 0.0)));
+        for (index, stage) in [BroodStage::Egg, BroodStage::Larva, BroodStage::Pupa]
+            .into_iter()
+            .enumerate()
+        {
+            world.spawn((
+                Brood {
+                    stage,
+                    timer: 0.0,
+                    spawn_index: index as u64,
+                },
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ));
+        }
 
         world.run_system_once(update_colony_stats_hud).unwrap();
 
@@ -366,6 +449,11 @@ mod tests {
             rendered.contains("deaths 0") && rendered.contains("corpses 2"),
             "{rendered}"
         );
+        assert!(
+            rendered.contains("brood eggs 1   larvae 1   pupae 1"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("queen laying"), "{rendered}");
 
         // A sub-display change must not touch the text.
         let before = world
