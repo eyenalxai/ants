@@ -25,6 +25,7 @@ impl Plugin for OverlayPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(PheromoneDisplayState { enabled: false })
             .insert_resource(SelectedAnt { entity: None })
+            .init_resource::<sensor_cone::SensorConeState>()
             .add_systems(
                 Startup,
                 (
@@ -94,8 +95,9 @@ mod tests {
         world.init_resource::<PheromoneGrid>();
         world.insert_resource(PheromoneDisplayState { enabled: false });
         world.insert_resource(SelectedAnt { entity: None });
+        world.insert_resource(sensor_cone::SensorConeState::default());
         world.insert_resource(Assets::<Image>::default());
-        world.insert_resource(Time::<()>::default());
+        world.insert_resource(Time::<bevy::time::Real>::default());
         world.insert_resource(ButtonInput::<KeyCode>::default());
 
         world

@@ -36,6 +36,14 @@ pub enum SensorConePart {
     Ant,
 }
 
+/// Cached visibility of the persistent cone entities. While it is `false`,
+/// [`draw_sensor_cone`] can return without iterating (or re-marking) any of
+/// them when there is no selection.
+#[derive(Resource, Default)]
+pub struct SensorConeState {
+    visible: bool,
+}
+
 /// Selected-ant lookup (read-only, disjoint from the cone entities).
 type AntQuery<'w, 's> =
     Query<'w, 's, (Entity, &'static Ant, &'static Transform), (With<Ant>, Without<SensorConePart>)>;
@@ -105,15 +113,17 @@ pub fn setup_sensor_cone(mut commands: Commands) {
 
 /// Move the persistent cone entities over the selected ant. The selection is
 /// re-rolled (without allocation) only when it disappears; with no valid
-/// selection every part is hidden.
+/// selection every part is hidden exactly once, so idle frames do not touch
+/// (or re-mark) any of the 28 cone entities.
 pub fn draw_sensor_cone(
     ant_query: AntQuery,
     mut selected_ant: ResMut<SelectedAnt>,
     pheromone_grid: Res<PheromoneGrid>,
+    mut state: ResMut<SensorConeState>,
     mut parts: ConePartsQuery,
 ) {
     let Some(selected) = selected_ant.entity else {
-        hide_all(&mut parts);
+        hide_all(&mut parts, &mut state);
         return;
     };
 
@@ -125,7 +135,7 @@ pub fn draw_sensor_cone(
         selected_ant.entity = picked;
 
         let Some(picked) = picked else {
-            hide_all(&mut parts);
+            hide_all(&mut parts, &mut state);
             return;
         };
 
@@ -145,8 +155,17 @@ pub fn draw_sensor_cone(
         PheromoneKind::ToFood
     };
 
+    // Only write `Visibility` on the hidden -> visible transition.
+    let was_visible = state.visible;
+
+    if !was_visible {
+        state.visible = true;
+    }
+
     for (part, mut part_transform, mut sprite, mut visibility) in &mut parts {
-        *visibility = Visibility::Visible;
+        if !was_visible {
+            *visibility = Visibility::Visible;
+        }
 
         match *part {
             SensorConePart::Line(index) => {
@@ -197,8 +216,15 @@ pub fn sample_marker_color(kind: PheromoneKind, raw: f32) -> Color {
     }
 }
 
-/// Hide every persistent cone part without despawning it.
-fn hide_all(parts: &mut ConePartsQuery) {
+/// Hide every persistent cone part without despawning it. Later calls while
+/// already hidden are no-ops, so the entities are not re-marked every frame.
+fn hide_all(parts: &mut ConePartsQuery, state: &mut SensorConeState) {
+    if !state.visible {
+        return;
+    }
+
+    state.visible = false;
+
     for (_, _, _, mut visibility) in parts.iter_mut() {
         *visibility = Visibility::Hidden;
     }
@@ -208,6 +234,7 @@ fn hide_all(parts: &mut ConePartsQuery) {
 mod tests {
     use super::*;
     use crate::constants::pheromone::PHEROMONE_VISUAL_SCALE;
+    use bevy::ecs::change_detection::Tick;
     use bevy::ecs::system::RunSystemOnce;
 
     const EPS: f32 = 1e-6;
@@ -216,9 +243,18 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<PheromoneGrid>();
         world.insert_resource(SelectedAnt { entity: None });
+        world.insert_resource(SensorConeState::default());
         world.run_system_once(setup_sensor_cone).unwrap();
 
         world
+    }
+
+    fn visibility_tick(world: &World, entity: Entity) -> Tick {
+        world
+            .entity(entity)
+            .get_change_ticks::<Visibility>()
+            .expect("cone part has visibility")
+            .changed
     }
 
     #[test]
@@ -334,10 +370,45 @@ mod tests {
     }
 
     #[test]
+    fn idle_cone_frames_do_not_touch_visibility() {
+        let mut world = spawn_cone_world();
+
+        let part = {
+            let mut query = world.query_filtered::<Entity, With<SensorConePart>>();
+            query.iter(&world).next().expect("cone parts")
+        };
+
+        // The cone starts hidden; the first idle frame must not re-mark it.
+        world.run_system_once(draw_sensor_cone).unwrap();
+        let hidden_tick = visibility_tick(&world, part);
+
+        for _ in 0..3 {
+            world.run_system_once(draw_sensor_cone).unwrap();
+        }
+
+        assert_eq!(hidden_tick, visibility_tick(&world, part));
+
+        // While an ant is selected the visibility transition happens once;
+        // later frames only move the parts.
+        let ant = world
+            .spawn((Ant::test_ant(0.0), Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        world.resource_mut::<SelectedAnt>().entity = Some(ant);
+
+        world.run_system_once(draw_sensor_cone).unwrap();
+        assert_eq!(*world.get::<Visibility>(part).unwrap(), Visibility::Visible);
+        let visible_tick = visibility_tick(&world, part);
+
+        world.run_system_once(draw_sensor_cone).unwrap();
+        assert_eq!(visible_tick, visibility_tick(&world, part));
+    }
+
+    #[test]
     fn cone_follows_selected_ant_and_hides_without_it() {
         let mut world = World::new();
         world.init_resource::<PheromoneGrid>();
         world.insert_resource(SelectedAnt { entity: None });
+        world.insert_resource(SensorConeState::default());
         let ant = world
             .spawn((Ant::test_ant(0.0), Transform::from_xyz(10.0, 20.0, 0.0)))
             .id();

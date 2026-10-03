@@ -129,10 +129,10 @@ impl PheromoneGrid {
     ///
     /// Retention is frame-rate independent: `0.5^(dt / half_life)`. Diffusion
     /// is a 5-point Laplacian with zero-flux borders, double-buffered so the
-    /// result does not depend on iteration order.
+    /// result does not depend on iteration order. `version` only changes when
+    /// a cell value actually changes, so an empty grid (or a step that cannot
+    /// alter any cell) leaves it untouched and the overlay can skip its upload.
     pub fn step(&mut self, dt: f32) {
-        self.version = self.version.wrapping_add(1);
-
         if self.active_count == 0 || !dt.is_finite() || dt <= 0.0 {
             return;
         }
@@ -171,6 +171,8 @@ impl PheromoneGrid {
             }
         });
 
+        let mut changed = false;
+
         for_each_set_bit(&touched[..], |index| {
             let center = cells[index];
             let x = index % GRID_WIDTH;
@@ -205,10 +207,18 @@ impl PheromoneGrid {
                 degree += 1.0;
             }
 
-            scratch[index] = Pheromone {
+            let next = Pheromone {
                 to_food: diffuse(center.to_food, food_sum, degree, diffusion, retention),
                 to_nest: diffuse(center.to_nest, nest_sum, degree, diffusion, retention),
             };
+
+            // Degenerate steps can leave a cell bit-identical (e.g. a zero
+            // neighbor of an active cell); those must not dirty the overlay.
+            if next != center {
+                changed = true;
+            }
+
+            scratch[index] = next;
         });
 
         // Drop the old values so the spare buffer is zeroed again, then swap.
@@ -226,6 +236,10 @@ impl PheromoneGrid {
         });
 
         touched.fill(0);
+
+        if changed {
+            self.version = self.version.wrapping_add(1);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -478,16 +492,17 @@ mod tests {
     fn active_set_tracks_deposits_and_empty_steps() {
         let mut grid = PheromoneGrid::new();
 
-        // An empty grid only bumps the version.
+        // An empty grid step is a no-op and leaves the version unchanged.
         let version = grid.version();
         grid.step(1.0 / 60.0);
-        assert_eq!(grid.version(), version + 1);
+        assert_eq!(grid.version(), version);
         assert_eq!(grid.active_count, 0);
 
         // A deposit far from the origin activates its cell ...
         let far = UVec2::new(150, 100);
         grid.add(far, 4.0, 0.0);
         assert_eq!(grid.active_count, 1);
+        let version = grid.version();
 
         let before = grid.sample(far, PheromoneKind::ToFood);
         grid.step(1.0 / 60.0);
@@ -497,6 +512,8 @@ mod tests {
             after < before,
             "active cell should decay: {after} !< {before}"
         );
+        // A real step is a mutation.
+        assert!(grid.version() > version);
         // ... and the step activates the orthogonal neighborhood too.
         assert!(grid.active_count >= 5);
 
@@ -506,6 +523,41 @@ mod tests {
         }
         assert_eq!(grid.active_count, 0);
         assert_eq!(grid_total(&grid, PheromoneKind::ToFood), 0.0);
+
+        // Back to empty: further steps are no-ops again.
+        let version = grid.version();
+        grid.step(1.0 / 60.0);
+        assert_eq!(grid.version(), version);
+    }
+
+    #[test]
+    fn step_only_bumps_the_version_when_a_cell_changes() {
+        let mut grid = PheromoneGrid::new();
+        let cell = UVec2::new(40, 30);
+
+        // Empty grid: no step (valid or not) may bump the version.
+        let version = grid.version();
+        grid.step(1.0 / 64.0);
+        grid.step(0.0);
+        grid.step(-1.0);
+        grid.step(f32::NAN);
+        grid.step(f32::INFINITY);
+        assert_eq!(grid.version(), version);
+
+        // A populated grid changes on a real step.
+        grid.add(cell, 1.0, 1.0);
+        let version = grid.version();
+        grid.step(1.0 / 64.0);
+        assert!(grid.version() > version);
+
+        // Non-positive or non-finite `dt` leaves live content untouched.
+        let before = *grid.get(cell).unwrap();
+        let version = grid.version();
+        grid.step(0.0);
+        grid.step(-0.5);
+        grid.step(f32::NAN);
+        assert_eq!(grid.version(), version);
+        assert_eq!(*grid.get(cell).unwrap(), before);
     }
 
     #[test]

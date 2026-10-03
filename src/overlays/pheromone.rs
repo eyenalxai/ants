@@ -4,6 +4,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::time::Real;
 
 use crate::constants::pheromone::{PHEROMONE_VISUAL_ALPHA, PHEROMONE_VISUAL_SCALE};
 use crate::constants::world::{GRID_HEIGHT, GRID_WIDTH, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
@@ -63,10 +64,13 @@ pub fn setup_pheromone_overlay(mut commands: Commands, mut images: ResMut<Assets
 }
 
 /// Upload the grid into the overlay texture when it is visible and changed, at
-/// most 30 times per second. Nothing but the visibility is touched while the
-/// overlay is off.
+/// most 30 times per second. The throttle counts real time rather than virtual
+/// time, so edits made while the simulation is paused (for example a nest drag
+/// clearing the `to_nest` channel) still refresh the overlay. Nothing but the
+/// visibility is touched while the overlay is off, and an unchanged
+/// [`PheromoneGrid::version`] never re-uploads the 30k-cell texture.
 pub fn update_pheromone_visuals(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     pheromone_grid: Res<PheromoneGrid>,
     display_state: Res<PheromoneDisplayState>,
     mut images: ResMut<Assets<Image>>,
@@ -88,20 +92,21 @@ pub fn update_pheromone_visuals(
         *visibility = Visibility::Visible;
     }
 
+    let version = pheromone_grid.version();
+
+    // Unchanged content never uploads and never accumulates throttle time.
+    if version == overlay.uploaded_version {
+        return;
+    }
+
     // First upload after enabling happens immediately; later ones are
-    // throttled to 30 Hz.
+    // throttled to 30 Hz of real time.
     if overlay.uploaded_version != u64::MAX {
         overlay.upload_accumulator += time.delta_secs();
 
         if overlay.upload_accumulator < UPLOAD_INTERVAL_SECS {
             return;
         }
-
-        overlay.upload_accumulator = 0.0;
-    }
-
-    if pheromone_grid.version() == overlay.uploaded_version {
-        return;
     }
 
     let Some(mut image) = images.get_mut(&overlay.image) else {
@@ -129,7 +134,8 @@ pub fn update_pheromone_visuals(
         }
     }
 
-    overlay.uploaded_version = pheromone_grid.version();
+    overlay.uploaded_version = version;
+    overlay.upload_accumulator = 0.0;
 }
 
 /// Compressive visual normalization shared by the overlay and the sensor-cone
@@ -161,11 +167,58 @@ fn cell_pixel(pheromone: &Pheromone) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::sets::Paused;
     use bevy::ecs::system::RunSystemOnce;
+    use std::time::Duration;
 
     /// Byte alpha of a single fully saturated channel:
     /// `min(0.9, 1.0) * PHEROMONE_VISUAL_ALPHA * 255`, rounded.
     const FULL_ALPHA_BYTE: u8 = 115;
+
+    fn overlay_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(Assets::<Image>::default());
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(PheromoneDisplayState { enabled: true });
+        world.init_resource::<PheromoneGrid>();
+        world.run_system_once(setup_pheromone_overlay).unwrap();
+
+        world
+    }
+
+    fn overlay_parts(world: &mut World) -> (Entity, Handle<Image>) {
+        let mut query = world.query::<(Entity, &PheromoneOverlay)>();
+        let (entity, overlay) = query.single(world).expect("one overlay sprite");
+        (entity, overlay.image.clone())
+    }
+
+    /// Flat byte offset of `cell` in the top-down texture.
+    fn flat_offset(cell: UVec2) -> usize {
+        (GRID_HEIGHT - 1 - cell.y as usize) * GRID_WIDTH * 4 + cell.x as usize * 4
+    }
+
+    fn image_pixel(world: &World, image: &Handle<Image>, offset: usize) -> [u8; 4] {
+        let images = world.resource::<Assets<Image>>();
+        let data = images
+            .get(image)
+            .and_then(|image| image.data.as_ref())
+            .expect("overlay image data");
+
+        data[offset..offset + 4].try_into().unwrap()
+    }
+
+    fn uploaded_version(world: &World, overlay: Entity) -> u64 {
+        world
+            .get::<PheromoneOverlay>(overlay)
+            .unwrap()
+            .uploaded_version
+    }
+
+    fn advance_real_time(world: &mut World, millis: u64) {
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(millis));
+    }
 
     #[test]
     fn visual_normalization_is_compressive_and_saturating() {
@@ -224,45 +277,28 @@ mod tests {
 
     #[test]
     fn overlay_uploads_cell_pixels_and_hides_when_disabled() {
-        let mut world = World::new();
-        world.insert_resource(Assets::<Image>::default());
-        world.insert_resource(Time::<()>::default());
-        world.insert_resource(PheromoneDisplayState { enabled: true });
-        world.init_resource::<PheromoneGrid>();
+        let mut world = overlay_world();
 
         let cell = UVec2::new(3, 5);
         world
             .resource_mut::<PheromoneGrid>()
             .add(cell, PHEROMONE_VISUAL_SCALE, 0.0);
 
-        world.run_system_once(setup_pheromone_overlay).unwrap();
         world.run_system_once(update_pheromone_visuals).unwrap();
 
-        let (overlay_entity, image_handle) = {
-            let mut query = world.query::<(Entity, &PheromoneOverlay)>();
-            let (entity, overlay) = query.single(&world).expect("one overlay sprite");
-            (entity, overlay.image.clone())
-        };
+        let (overlay_entity, image_handle) = overlay_parts(&mut world);
         assert_eq!(
             *world.get::<Visibility>(overlay_entity).unwrap(),
             Visibility::Visible
         );
 
         // Texture rows run top-down, grid rows bottom-up.
-        let flat = (GRID_HEIGHT - 1 - cell.y as usize) * GRID_WIDTH * 4 + cell.x as usize * 4;
+        let flat = flat_offset(cell);
         let expected = cell_pixel(&Pheromone {
             to_food: PHEROMONE_VISUAL_SCALE,
             to_nest: 0.0,
         });
-        let uploaded = {
-            let images = world.resource::<Assets<Image>>();
-            let data = images
-                .get(&image_handle)
-                .and_then(|image| image.data.as_ref())
-                .expect("overlay image data");
-            data[flat..flat + 4].to_vec()
-        };
-        assert_eq!(uploaded, expected);
+        assert_eq!(image_pixel(&world, &image_handle, flat), expected);
 
         // Turning the overlay off hides the sprite and leaves the texture
         // untouched.
@@ -273,11 +309,139 @@ mod tests {
             *world.get::<Visibility>(overlay_entity).unwrap(),
             Visibility::Hidden
         );
-        let images = world.resource::<Assets<Image>>();
-        let data = images
-            .get(&image_handle)
-            .and_then(|image| image.data.as_ref())
-            .expect("overlay image data");
-        assert_eq!(&data[flat..flat + 4], uploaded.as_slice());
+        assert_eq!(image_pixel(&world, &image_handle, flat), expected);
+    }
+
+    #[test]
+    fn paused_edits_refresh_the_overlay_on_real_time() {
+        let mut world = overlay_world();
+        // A frozen virtual clock and an active pause flag must not stall the
+        // overlay: the throttle counts `Time<Real>` instead.
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(Paused(true));
+
+        let cell = UVec2::new(3, 5);
+        world
+            .resource_mut::<PheromoneGrid>()
+            .add(cell, 0.0, PHEROMONE_VISUAL_SCALE);
+
+        world.run_system_once(update_pheromone_visuals).unwrap();
+
+        let (overlay_entity, image_handle) = overlay_parts(&mut world);
+        let flat = flat_offset(cell);
+        assert_eq!(
+            image_pixel(&world, &image_handle, flat),
+            cell_pixel(&Pheromone {
+                to_food: 0.0,
+                to_nest: PHEROMONE_VISUAL_SCALE,
+            })
+        );
+
+        // A paused nest drag clears the to-nest channel.
+        world.resource_mut::<PheromoneGrid>().clear_to_nest();
+        let version = world.resource::<PheromoneGrid>().version();
+
+        // Still inside the 30 Hz window: no upload yet.
+        advance_real_time(&mut world, 5);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_ne!(uploaded_version(&world, overlay_entity), version);
+
+        // Past the window: the overlay follows the paused edit.
+        advance_real_time(&mut world, 40);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(uploaded_version(&world, overlay_entity), version);
+        assert_eq!(image_pixel(&world, &image_handle, flat), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn unchanged_or_disabled_overlays_do_not_reupload() {
+        let mut world = overlay_world();
+
+        let cell = UVec2::new(3, 5);
+        world
+            .resource_mut::<PheromoneGrid>()
+            .add(cell, PHEROMONE_VISUAL_SCALE, 0.0);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+
+        let (overlay_entity, image_handle) = overlay_parts(&mut world);
+        let flat = flat_offset(cell);
+
+        // Corrupt the texture so any upload is detectable.
+        {
+            let mut images = world.resource_mut::<Assets<Image>>();
+            let mut image = images.get_mut(&image_handle).expect("overlay image");
+            let data = image.data.as_mut().expect("overlay image data");
+            data[flat..flat + 4].copy_from_slice(&[0xAB; 4]);
+        }
+
+        // Unchanged version: no upload even after the throttle window.
+        advance_real_time(&mut world, 40);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(image_pixel(&world, &image_handle, flat), [0xAB; 4]);
+
+        // Disabled overlay: no upload either.
+        world.resource_mut::<PheromoneDisplayState>().enabled = false;
+        advance_real_time(&mut world, 40);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(image_pixel(&world, &image_handle, flat), [0xAB; 4]);
+        assert_eq!(
+            *world.get::<Visibility>(overlay_entity).unwrap(),
+            Visibility::Hidden
+        );
+
+        // A real change uploads again once enabled and past the throttle.
+        world.resource_mut::<PheromoneDisplayState>().enabled = true;
+        world
+            .resource_mut::<PheromoneGrid>()
+            .add(cell, PHEROMONE_VISUAL_SCALE, 0.0);
+        advance_real_time(&mut world, 40);
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_ne!(image_pixel(&world, &image_handle, flat), [0xAB; 4]);
+    }
+
+    #[test]
+    fn visibility_is_only_written_on_transitions() {
+        let mut world = overlay_world();
+        world.run_system_once(update_pheromone_visuals).unwrap();
+
+        let (overlay_entity, _) = overlay_parts(&mut world);
+        let visible_tick = world
+            .entity(overlay_entity)
+            .get_change_ticks::<Visibility>()
+            .unwrap()
+            .changed;
+
+        // An enabled, unchanged overlay must not re-mark its visibility.
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(
+            visible_tick,
+            world
+                .entity(overlay_entity)
+                .get_change_ticks::<Visibility>()
+                .unwrap()
+                .changed
+        );
+
+        // The hide transition still writes exactly once.
+        world.resource_mut::<PheromoneDisplayState>().enabled = false;
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(
+            *world.get::<Visibility>(overlay_entity).unwrap(),
+            Visibility::Hidden
+        );
+        let hidden_tick = world
+            .entity(overlay_entity)
+            .get_change_ticks::<Visibility>()
+            .unwrap()
+            .changed;
+        world.run_system_once(update_pheromone_visuals).unwrap();
+        assert_eq!(
+            hidden_tick,
+            world
+                .entity(overlay_entity)
+                .get_change_ticks::<Visibility>()
+                .unwrap()
+                .changed
+        );
     }
 }

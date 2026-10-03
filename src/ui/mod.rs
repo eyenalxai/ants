@@ -4,6 +4,11 @@ pub mod fps;
 pub mod hud;
 pub mod widgets;
 
+// `src/perf.rs` is declared here (rather than from `main.rs`, which this
+// workstream does not own) so the file keeps its requested top-level path.
+#[path = "../perf.rs"]
+pub mod perf;
+
 use bevy::prelude::*;
 
 use crate::core::sets::{GameSet, Paused};
@@ -12,7 +17,8 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Paused>()
+        app.add_plugins(perf::PerfPlugin)
+            .init_resource::<Paused>()
             .add_systems(Startup, (hud::setup_hud, fps::setup_fps_counter))
             .add_systems(
                 Update,
@@ -21,10 +27,33 @@ impl Plugin for UiPlugin {
                     widgets::sync_tool_button_colors,
                     hud::sync_paused_indicator,
                     fps::fps_text_update_system,
+                    fps::fps_perf_text_update_system,
                     fps::fps_counter_showhide,
                 )
                     .chain()
                     .in_set(GameSet::Ui),
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::diagnostic::DiagnosticsStore;
+
+    /// `UiPlugin` owns `PerfPlugin`; a headless app must come up with the
+    /// counters registered and every UI system runnable.
+    #[test]
+    fn ui_plugin_registers_perf_counters_headless() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::editor::EditorMode>()
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .insert_resource(DiagnosticsStore::default())
+            .add_plugins(UiPlugin);
+
+        app.update();
+
+        assert!(app.world().get_resource::<perf::PerfStats>().is_some());
     }
 }

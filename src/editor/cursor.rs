@@ -116,13 +116,21 @@ pub fn update_food_cursor(
         .and_then(world_to_grid)
         .map(|origin| grid_to_world(origin + brush_center_offset()))
     else {
-        *visibility = Visibility::Hidden;
+        if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
+
         return;
     };
 
-    transform.translation.x = center.x;
-    transform.translation.y = center.y;
-    *visibility = Visibility::Visible;
+    if transform.translation.x != center.x || transform.translation.y != center.y {
+        transform.translation.x = center.x;
+        transform.translation.y = center.y;
+    }
+
+    if *visibility != Visibility::Visible {
+        *visibility = Visibility::Visible;
+    }
 }
 
 /// Move and tint the nest cursor; hide it when the tool is inactive or the
@@ -150,27 +158,108 @@ pub fn update_nest_cursor(
     };
 
     let Some(world_pos) = world_pos else {
-        *visibility = Visibility::Hidden;
+        if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
+
         return;
     };
 
     // Preview where the clamped nest would land.
     let position = clamp_nest_position(world_pos);
 
-    transform.translation.x = position.x;
-    transform.translation.y = position.y;
-    sprite.color = if drag.dragging {
+    if transform.translation.x != position.x || transform.translation.y != position.y {
+        transform.translation.x = position.x;
+        transform.translation.y = position.y;
+    }
+
+    let color = if drag.dragging {
         NEST_CURSOR_DRAG_COLOR
     } else {
         NEST_CURSOR_IDLE_COLOR
     };
-    *visibility = Visibility::Visible;
+
+    if sprite.color != color {
+        sprite.color = color;
+    }
+
+    if *visibility != Visibility::Visible {
+        *visibility = Visibility::Visible;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::change_detection::Tick;
     use bevy::ecs::system::RunSystemOnce;
+
+    fn cursor_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<EditorMode>();
+        world.insert_resource(NestDrag::default());
+        world.spawn(Window::default());
+        world.spawn((Camera::default(), GlobalTransform::default()));
+        world.run_system_once(setup_cursors).unwrap();
+
+        world
+    }
+
+    fn cursor_entities(world: &mut World) -> (Entity, Entity) {
+        let mut food = world.query_filtered::<Entity, With<FoodCursor>>();
+        let food = food.single(world).expect("food cursor entity");
+        let mut nest = world.query_filtered::<Entity, With<NestCursor>>();
+        let nest = nest.single(world).expect("nest cursor entity");
+
+        (food, nest)
+    }
+
+    fn visibility_tick(world: &World, entity: Entity) -> Tick {
+        world
+            .entity(entity)
+            .get_change_ticks::<Visibility>()
+            .expect("cursor has visibility")
+            .changed
+    }
+
+    #[test]
+    fn inactive_cursors_are_hidden_once_and_not_remarked() {
+        let mut world = cursor_world();
+        let (food, nest) = cursor_entities(&mut world);
+
+        world.run_system_once(update_food_cursor).unwrap();
+        world.run_system_once(update_nest_cursor).unwrap();
+
+        assert_eq!(*world.get::<Visibility>(food).unwrap(), Visibility::Hidden);
+        assert_eq!(*world.get::<Visibility>(nest).unwrap(), Visibility::Hidden);
+
+        let food_tick = visibility_tick(&world, food);
+        let nest_tick = visibility_tick(&world, nest);
+
+        for _ in 0..3 {
+            world.run_system_once(update_food_cursor).unwrap();
+            world.run_system_once(update_nest_cursor).unwrap();
+        }
+
+        assert_eq!(food_tick, visibility_tick(&world, food));
+        assert_eq!(nest_tick, visibility_tick(&world, nest));
+    }
+
+    #[test]
+    fn cursors_are_hidden_when_their_tool_is_inactive() {
+        let mut world = cursor_world();
+        let (food, nest) = cursor_entities(&mut world);
+
+        // Pretend both cursors were left visible by an active tool.
+        *world.get_mut::<Visibility>(food).unwrap() = Visibility::Visible;
+        *world.get_mut::<Visibility>(nest).unwrap() = Visibility::Visible;
+
+        world.run_system_once(update_food_cursor).unwrap();
+        world.run_system_once(update_nest_cursor).unwrap();
+
+        assert_eq!(*world.get::<Visibility>(food).unwrap(), Visibility::Hidden);
+        assert_eq!(*world.get::<Visibility>(nest).unwrap(), Visibility::Hidden);
+    }
 
     #[test]
     fn cursor_systems_run_without_a_window_camera_or_cursor() {
