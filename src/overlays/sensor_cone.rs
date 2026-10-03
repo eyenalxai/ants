@@ -160,15 +160,22 @@ fn hide_all(parts: &mut ConePartsQuery) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulation::ant::AntPhase;
     use bevy::ecs::system::RunSystemOnce;
 
     fn test_ant() -> Ant {
         Ant {
             direction: 0.0,
             has_food: false,
-            lifetime: 1.0,
+            home: Vec2::ZERO,
+            age: 1.0,
             max_lifetime: 1.0,
+            energy: 1.0,
+            phase: AntPhase::Foraging,
+            handling_timer: 0.0,
+            base_speed: 1.0,
             speed: 1.0,
+            trips_completed: 0,
         }
     }
 
