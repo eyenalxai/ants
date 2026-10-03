@@ -1,3 +1,5 @@
+//! Pheromone evaporation and diffusion pass.
+
 use bevy::prelude::*;
 
 use crate::pheromone::grid::PheromoneGrid;

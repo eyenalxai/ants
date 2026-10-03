@@ -190,11 +190,10 @@ pub fn setup_hud(mut commands: Commands) {
     ));
 }
 
-/// Dispatch HUD button presses to the pause flag and the exclusive editor mode.
+/// Dispatch HUD button presses to virtual time and the exclusive editor mode.
 pub fn handle_button_press(
     buttons: Query<(&Interaction, &ToolButton), Changed<Interaction>>,
     mut mode: ResMut<EditorMode>,
-    mut paused: ResMut<Paused>,
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     for (interaction, button) in &buttons {
@@ -204,12 +203,10 @@ pub fn handle_button_press(
 
         match button.action {
             ButtonAction::TogglePause => {
-                paused.0 = !paused.0;
-
-                if paused.0 {
-                    virtual_time.pause();
-                } else {
+                if virtual_time.is_paused() {
                     virtual_time.unpause();
+                } else {
+                    virtual_time.pause();
                 }
             }
             ButtonAction::ToggleFoodMode => {
@@ -222,16 +219,31 @@ pub fn handle_button_press(
     }
 }
 
-/// Show the paused indicator only while `Paused` holds (change-driven).
+/// Show the paused indicator while `Time<Virtual>` is paused and keep the
+/// [`Paused`] mirror in sync.
+///
+/// `Time<Virtual>` is the single source of truth; this is the only writer of
+/// [`Paused`], which exists so widget styling can read a plain resource. The
+/// indicator compares against the previous frame, so it is only rewritten on
+/// change.
 pub fn sync_paused_indicator(
-    paused: Res<Paused>,
+    virtual_time: Res<Time<Virtual>>,
+    mut paused: ResMut<Paused>,
+    mut was_paused: Local<Option<bool>>,
     indicator: Single<&mut Visibility, With<PausedIndicator>>,
 ) {
-    if !paused.is_changed() {
+    let is_paused = virtual_time.is_paused();
+
+    if paused.0 != is_paused {
+        paused.0 = is_paused;
+    }
+
+    if *was_paused == Some(is_paused) {
         return;
     }
 
-    *indicator.into_inner() = if paused.0 {
+    *was_paused = Some(is_paused);
+    *indicator.into_inner() = if is_paused {
         Visibility::Visible
     } else {
         Visibility::Hidden
@@ -337,5 +349,52 @@ mod tests {
 
         let mut stats = world.query_filtered::<Entity, With<ColonyStatsText>>();
         assert!(stats.single(&world).is_ok());
+    }
+
+    #[test]
+    fn pause_button_toggles_virtual_time_and_the_mirror() {
+        let mut world = World::new();
+        world.init_resource::<Paused>();
+        world.init_resource::<Time<Virtual>>();
+        world.init_resource::<EditorMode>();
+        world.run_system_once(setup_hud).unwrap();
+
+        let pause_button = {
+            let mut query = world.query::<(Entity, &ToolButton)>();
+            query
+                .iter(&world)
+                .find(|(_, button)| button.action == ButtonAction::TogglePause)
+                .map(|(entity, _)| entity)
+                .expect("pause button")
+        };
+
+        let press = |world: &mut World, interaction: Interaction| {
+            *world
+                .entity_mut(pause_button)
+                .get_mut::<Interaction>()
+                .unwrap() = interaction;
+        };
+
+        press(&mut world, Interaction::Pressed);
+        world.run_system_once(handle_button_press).unwrap();
+        assert!(world.resource::<Time<Virtual>>().is_paused());
+
+        world.run_system_once(sync_paused_indicator).unwrap();
+        assert!(
+            world.resource::<Paused>().0,
+            "the mirror follows virtual time"
+        );
+
+        // Releasing is not a press; a second press resumes.
+        press(&mut world, Interaction::None);
+        world.run_system_once(handle_button_press).unwrap();
+        assert!(world.resource::<Time<Virtual>>().is_paused());
+
+        press(&mut world, Interaction::Pressed);
+        world.run_system_once(handle_button_press).unwrap();
+        assert!(!world.resource::<Time<Virtual>>().is_paused());
+
+        world.run_system_once(sync_paused_indicator).unwrap();
+        assert!(!world.resource::<Paused>().0);
     }
 }

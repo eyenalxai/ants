@@ -16,7 +16,7 @@ use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
 use crate::constants::world::{
-    FOOD_X, GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, NEST_X, NEST_Y, PLAY_AREA_HEIGHT,
+    FOOD_X, GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, NEST_X, NEST_Y, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH,
 };
 use crate::pheromone::PheromonePlugin;
 use crate::pheromone::grid::{PheromoneGrid, PheromoneKind};
@@ -40,6 +40,8 @@ const TEST_FOOD_DISTANCE: f32 = 450.0;
 const TEST_POPULATION_CAP: usize = 800;
 /// Seconds the trail test runs before measuring.
 const TRAIL_CHECK_SECS: u32 = 45;
+/// Seconds of fixed steps compared by [`deterministic_replay_is_bit_identical`].
+const REPLAY_SECS: u32 = 15;
 /// Corridor `ToFood` average required to call it a trail (measured ~0.125).
 const MIN_CORRIDOR_TO_FOOD: f32 = 0.05;
 /// Deliveries required by [`TRAIL_CHECK_SECS`] (measured ~51).
@@ -128,7 +130,7 @@ pub fn corridor_avg(grid: &PheromoneGrid, kind: PheromoneKind, y_center: f32, x_
         }
 
         for x in 0..GRID_WIDTH as u32 {
-            let world_x = x as f32 * GRID_SIZE - 800.0 / 2.0 + GRID_SIZE / 2.0;
+            let world_x = x as f32 * GRID_SIZE - PLAY_AREA_WIDTH / 2.0 + GRID_SIZE / 2.0;
             if world_x < NEST_X || world_x > x_end {
                 continue;
             }
@@ -186,6 +188,42 @@ pub fn food_remaining(world: &mut World) -> f32 {
     food.iter().map(|(_, amount)| amount.max(0.0)).sum()
 }
 
+/// One ant's observable state for the determinism replay, keyed by entity
+/// index (generational IDs are world-local and must not be compared).
+#[derive(PartialEq, Debug)]
+struct AntSnapshot {
+    index: u32,
+    x: f32,
+    y: f32,
+    direction: f32,
+    energy: f32,
+    age: f32,
+    carrying: f32,
+    trips_completed: u32,
+    phase: u8,
+}
+
+fn ant_snapshots(world: &mut World) -> Vec<AntSnapshot> {
+    let mut query = world.query::<(Entity, &Ant, &Transform)>();
+    let mut snapshots: Vec<AntSnapshot> = query
+        .iter(world)
+        .map(|(entity, ant, transform)| AntSnapshot {
+            index: entity.index_u32(),
+            x: transform.translation.x,
+            y: transform.translation.y,
+            direction: ant.direction,
+            energy: ant.energy,
+            age: ant.age,
+            carrying: ant.carrying,
+            trips_completed: ant.trips_completed,
+            phase: ant.phase as u8,
+        })
+        .collect();
+
+    snapshots.sort_by_key(|snapshot| snapshot.index);
+    snapshots
+}
+
 /// Emergent trail regression: with the real fixed-step chain, a colony must
 /// carry food home and build a `ToFood` corridor toward the food, clearly
 /// separated from a symmetric control band.
@@ -234,6 +272,59 @@ fn no_food_forms_no_to_food_corridor() {
     assert!(
         nest_total > 0.0,
         "ants should still walk and deposit ToNest"
+    );
+}
+
+/// Determinism contract (README): two apps that execute the same fixed-step
+/// sequence must produce bit-identical ant state, food totals, pheromone
+/// totals and colony counters. Sorted by entity index because generational
+/// IDs are world-local.
+#[test]
+fn deterministic_replay_is_bit_identical() {
+    let food_center = Vec2::new(NEST_X + TEST_FOOD_DISTANCE, NEST_Y);
+    let mut first = build_app(FoodSetup::Custom(food_center));
+    let mut second = build_app(FoodSetup::Custom(food_center));
+
+    run_seconds(&mut first, REPLAY_SECS, Some(TEST_POPULATION_CAP));
+    run_seconds(&mut second, REPLAY_SECS, Some(TEST_POPULATION_CAP));
+
+    let first_ants = ant_snapshots(first.world_mut());
+    let second_ants = ant_snapshots(second.world_mut());
+    assert!(
+        !first_ants.is_empty(),
+        "the replay must have ants to compare"
+    );
+    assert_eq!(
+        first_ants, second_ants,
+        "ant state diverged between identical runs"
+    );
+
+    assert_eq!(
+        food_remaining(first.world_mut()),
+        food_remaining(second.world_mut()),
+        "food totals diverged between identical runs"
+    );
+
+    let (first_food, first_nest) = grid_totals(first.world().resource::<PheromoneGrid>());
+    let (second_food, second_nest) = grid_totals(second.world().resource::<PheromoneGrid>());
+    assert_eq!(
+        (first_food, first_nest),
+        (second_food, second_nest),
+        "pheromone totals diverged between identical runs"
+    );
+
+    assert_eq!(
+        first.world().resource::<ColonyStats>().total_food_delivered,
+        second
+            .world()
+            .resource::<ColonyStats>()
+            .total_food_delivered,
+        "delivery totals diverged between identical runs"
+    );
+    assert_eq!(
+        first.world().resource::<AntPopulation>().0,
+        second.world().resource::<AntPopulation>().0,
+        "population diverged between identical runs"
     );
 }
 

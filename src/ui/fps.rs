@@ -153,7 +153,7 @@ pub fn fps_perf_text_update_system(
         return;
     }
 
-    let chain_micros = micros(stats.chain_secs);
+    let chain_micros = micros(stats.smoothed_chain_secs);
     let frame_micros = micros(stats.frame_secs);
 
     for (mut span, mut cache) in &mut span_query {
@@ -283,7 +283,7 @@ mod tests {
         world.resource_mut::<PerfEnabled>().0 = true;
         {
             let mut stats = world.resource_mut::<PerfStats>();
-            stats.chain_secs = 0.006_27;
+            stats.smoothed_chain_secs = 0.006_27;
             stats.frame_secs = 0.015_0;
         }
         world.run_system_once(fps_perf_text_update_system).unwrap();

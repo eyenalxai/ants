@@ -1,3 +1,5 @@
+//! Pheromone tuning constants (decay, diffusion, deposit kernel, visualization).
+
 /// Seconds after which a pheromone channel keeps half of its intensity.
 pub const PHEROMONE_HALF_LIFE_SECS: f32 = 10.0;
 /// Diffusion strength applied per normalized 60 Hz step.

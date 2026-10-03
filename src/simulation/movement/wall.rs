@@ -1,3 +1,5 @@
+//! Play-area wall collision and bounce response.
+
 use bevy::prelude::*;
 
 use crate::constants::world::{PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH, WALL_BOUNCE_MIN_ANGLE};

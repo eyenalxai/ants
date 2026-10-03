@@ -14,7 +14,7 @@ pub mod nest;
 #[cfg(test)]
 mod trail_tests;
 
-use bevy::log::info;
+use bevy::log::{info, warn_once};
 use bevy::prelude::*;
 
 use crate::constants::ant::{ANT_SPAWN_INTERVAL, MAX_ANTS};
@@ -30,20 +30,57 @@ use ant::{Ant, AntPopulation, AntSpawner};
 #[derive(Component)]
 pub struct Nest;
 
-/// World-space nest centre, kept in sync with the [`Nest`] transform by
-/// [`sync_nest_position`] at the start of every fixed step. Systems read this
+/// Authoritative world-space nest centre.
+///
+/// The editor writes it through [`NestPosition::set`] and
+/// [`sync_nest_transform`] mirrors it into the [`Nest`] transform every frame
+/// (also while paused), so the resource is never stale. Systems read this
 /// instead of querying the nest entity directly.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct NestPosition(pub Vec2);
 
-/// Copy the nest transform into [`NestPosition`]. A missing nest leaves the
-/// last known position in place.
-fn sync_nest_position(
-    nest_query: Query<&Transform, With<Nest>>,
-    mut nest_position: ResMut<NestPosition>,
+impl Default for NestPosition {
+    fn default() -> Self {
+        Self(Vec2::new(NEST_X, NEST_Y))
+    }
+}
+
+impl NestPosition {
+    /// `pos` clamped so the whole nest circle stays inside the play area.
+    pub fn clamped(pos: Vec2) -> Vec2 {
+        let limit = Vec2::new(
+            PLAY_AREA_WIDTH / 2.0 - NEST_RADIUS,
+            PLAY_AREA_HEIGHT / 2.0 - NEST_RADIUS,
+        );
+
+        pos.clamp(-limit, limit)
+    }
+
+    /// Move the nest, clamped to the play area. This is the only supported
+    /// writer.
+    pub fn set(&mut self, pos: Vec2) {
+        self.0 = Self::clamped(pos);
+    }
+}
+
+/// Write the [`Nest`] transform from the authoritative [`NestPosition`].
+///
+/// Runs in `Update` after the editor set, so a nest drag shows up in the same
+/// frame and the transform stays correct while paused (fixed steps stop).
+fn sync_nest_transform(
+    nest_position: Res<NestPosition>,
+    mut nest_query: Query<&mut Transform, With<Nest>>,
 ) {
-    if let Ok(transform) = nest_query.single() {
-        nest_position.0 = Vec2::new(transform.translation.x, transform.translation.y);
+    let Ok(mut transform) = nest_query.single_mut() else {
+        warn_once!("nest transform sync skipped: no nest entity");
+        return;
+    };
+
+    let target = nest_position.0;
+
+    if transform.translation.truncate() != target {
+        transform.translation.x = target.x;
+        transform.translation.y = target.y;
     }
 }
 
@@ -110,7 +147,6 @@ impl SimulationPlugin {
         .add_systems(
             FixedUpdate,
             (
-                sync_nest_position.in_set(SimSet::NestSync),
                 density::rebuild_ant_density.in_set(SimSet::Density),
                 ant::update_ant_energy_age.in_set(SimSet::Lifecycle),
                 ant::spawn_ants.in_set(SimSet::Spawn),
@@ -165,6 +201,9 @@ impl Plugin for SimulationPlugin {
         );
 
         app.add_systems(Startup, (setup_camera, spawn_world, food::setup_food_patch));
+        // The nest transform follows the authoritative `NestPosition` in
+        // `Update` (not in the fixed chain), so it is correct while paused.
+        app.add_systems(Update, sync_nest_transform.after(GameSet::Editor));
 
         Self::add_fixed_step_systems(app);
     }
@@ -275,5 +314,83 @@ mod tests {
         }
 
         assert!(app.world().resource::<FixedStepCount>().0 >= 1);
+    }
+
+    #[test]
+    fn nest_position_set_clamps_to_the_play_area() {
+        let limit = Vec2::new(
+            PLAY_AREA_WIDTH / 2.0 - NEST_RADIUS,
+            PLAY_AREA_HEIGHT / 2.0 - NEST_RADIUS,
+        );
+        let mut nest = NestPosition::default();
+        assert_eq!(nest.0, Vec2::new(NEST_X, NEST_Y));
+
+        nest.set(Vec2::new(1e6, -1e6));
+        assert_eq!(nest.0, Vec2::new(limit.x, -limit.y));
+
+        nest.set(Vec2::new(3.0, 4.0));
+        assert_eq!(nest.0, Vec2::new(3.0, 4.0));
+    }
+
+    #[test]
+    fn nest_transform_follows_the_authoritative_position() {
+        let mut app = App::new();
+        app.init_resource::<NestPosition>()
+            .add_systems(Update, sync_nest_transform);
+
+        let nest = app
+            .world_mut()
+            .spawn((Nest, Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<NestPosition>()
+            .set(Vec2::new(12.0, -34.0));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<Transform>(nest)
+                .unwrap()
+                .translation
+                .truncate(),
+            Vec2::new(12.0, -34.0)
+        );
+    }
+
+    /// The Move set must capture `prev_pos` before `move_ants` rewrites the
+    /// transform, so the deposit pass can reconstruct the real segment.
+    #[test]
+    fn move_set_captures_the_pre_move_position() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(PheromonePlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+                1.0 / 64.0,
+            )));
+        SimulationPlugin::add_fixed_step_systems(&mut app);
+
+        let start = Vec2::new(10.0, -5.0);
+        let ant = Ant::test_ant(0.0);
+        let entity = app
+            .world_mut()
+            .spawn((ant, Transform::from_xyz(start.x, start.y, 0.0)))
+            .id();
+
+        app.update();
+        app.update();
+
+        let ant = app.world().get::<Ant>(entity).unwrap();
+        let transform = app.world().get::<Transform>(entity).unwrap();
+
+        assert_eq!(
+            ant.prev_pos, start,
+            "prev_pos must be the pre-move position"
+        );
+        assert!(
+            transform.translation.x > start.x,
+            "the ant must have moved in +x, position {:?}",
+            transform.translation
+        );
     }
 }

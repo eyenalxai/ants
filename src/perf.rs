@@ -7,9 +7,8 @@
 //! panel. The per-tick cost is two `Instant::now()` calls and one `elapsed()`,
 //! with no allocations.
 //!
-//! The module is declared with `#[path = "../perf.rs"]` from `src/ui/mod.rs`
-//! (the only owned place that can declare a top-level module without touching
-//! `main.rs`), so the file keeps the requested `src/perf.rs` location.
+//! The module is declared at the crate root in `src/main.rs`, which also adds
+//! [`PerfPlugin`] next to the feature plugins.
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -39,9 +38,8 @@ impl PerfEnabled {
 /// seconds. Only updated while [`PerfEnabled`] holds.
 #[derive(Resource, Default)]
 pub struct PerfStats {
-    /// Wall time of the last complete [`GameSet::Sim`] chain.
-    pub chain_secs: f32,
-    /// Exponential moving average of [`PerfStats::chain_secs`].
+    /// Exponential moving average of the fixed-step chain wall time; equals
+    /// the last sample until the second measured tick.
     pub smoothed_chain_secs: f32,
     /// Smoothed frame time from Bevy's `frame_time` diagnostic.
     pub frame_secs: f32,
@@ -80,14 +78,13 @@ fn perf_chain_start(mut stats: ResMut<PerfStats>) {
 }
 
 /// Runs after every [`GameSet::Sim`] system and folds the elapsed wall time
-/// into the stats.
+/// into the smoothed stats.
 fn perf_chain_end(mut stats: ResMut<PerfStats>) {
     let Some(start) = stats.start.take() else {
         return;
     };
 
     let secs = start.elapsed().as_secs_f32();
-    stats.chain_secs = secs;
     stats.smoothed_chain_secs = if stats.ticks == 0 {
         secs
     } else {
@@ -214,11 +211,10 @@ mod tests {
         let stats = app.world().resource::<PerfStats>();
         assert!(stats.ticks >= 1, "expected a measured tick");
         assert!(
-            stats.chain_secs >= 0.001,
+            stats.smoothed_chain_secs >= 0.001,
             "chain time should cover the 1 ms busy system, got {} s",
-            stats.chain_secs
+            stats.smoothed_chain_secs
         );
-        assert!(stats.smoothed_chain_secs >= 0.001);
     }
 
     #[test]
@@ -253,8 +249,7 @@ mod tests {
         let stats = app.world().resource::<PerfStats>();
 
         println!(
-            "perf smoke: {ticks} fixed ticks, {SMOKE_ANTS} ants, last chain {:.3} ms, smoothed {:.3} ms, frame {:.3} ms",
-            stats.chain_secs * 1000.0,
+            "perf smoke: {ticks} fixed ticks, {SMOKE_ANTS} ants, smoothed chain {:.3} ms, frame {:.3} ms",
             stats.smoothed_chain_secs * 1000.0,
             stats.frame_secs * 1000.0,
         );
@@ -270,10 +265,9 @@ mod tests {
             "every tick should be measured"
         );
         assert!(
-            stats.chain_secs > 0.0 && stats.chain_secs < 1.0,
+            stats.smoothed_chain_secs > 0.0 && stats.smoothed_chain_secs < 1.0,
             "chain wall time outside the generous sanity window: {} s",
-            stats.chain_secs
+            stats.smoothed_chain_secs
         );
-        assert!(stats.smoothed_chain_secs > 0.0);
     }
 }

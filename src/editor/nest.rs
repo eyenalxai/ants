@@ -1,22 +1,19 @@
 //! Nest tool: drag the nest (clamped inside the play area) and re-home ants.
 
-use bevy::log::warn_once;
+use bevy::log::{debug, warn_once};
 use bevy::prelude::*;
 
-use crate::constants::world::{NEST_RADIUS, NEST_SIZE, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
+use crate::constants::world::NEST_SIZE;
 use crate::editor::cursor::{cursor_world_pos, pointer_over_ui};
 use crate::editor::{EditorMode, EditorModeKind};
 use crate::pheromone::grid::PheromoneGrid;
-use crate::simulation::Nest;
+use crate::simulation::NestPosition;
 use crate::simulation::ant::Ant;
 
 /// Written by [`handle_nest_drag`] when the nest actually moves and read by
-/// [`apply_nest_move`], which re-homes every ant and keeps the nest transform
-/// in sync.
+/// [`apply_nest_move`], which re-homes every ant.
 #[derive(Message)]
 pub struct NestMoved {
-    /// Nest position before the move.
-    pub from: Vec2,
     /// New (clamped) nest position.
     pub to: Vec2,
 }
@@ -35,12 +32,7 @@ pub fn hits_nest(nest_pos: Vec2, pointer: Vec2) -> bool {
 /// Clamp a candidate nest center so the whole nest circle stays inside the
 /// play-area walls.
 pub fn clamp_nest_position(position: Vec2) -> Vec2 {
-    let limit = Vec2::new(
-        PLAY_AREA_WIDTH / 2.0 - NEST_RADIUS,
-        PLAY_AREA_HEIGHT / 2.0 - NEST_RADIUS,
-    );
-
-    position.clamp(-limit, limit)
+    NestPosition::clamped(position)
 }
 
 /// Cancel an in-progress drag when the nest tool is left (runs on mode change).
@@ -54,12 +46,16 @@ pub fn cancel_nest_drag_on_mode_exit(mode: Res<EditorMode>, mut drag: ResMut<Nes
 /// starts when the press lands inside the nest radius; releasing anywhere ends
 /// it, and the nest follows the cursor until then. The target is clamped so
 /// the whole nest circle stays inside the play area.
+///
+/// The drag writes the authoritative [`NestPosition`] and emits
+/// [`NestMoved`]; the nest transform is derived in `Update` by the simulation
+/// plugin.
 // `window` and `camera` cannot be joined: they live on different entities.
 #[allow(clippy::too_many_arguments)]
 pub fn handle_nest_drag(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut drag: ResMut<NestDrag>,
-    mut nest_query: Query<&mut Transform, With<Nest>>,
+    mut nest_position: ResMut<NestPosition>,
     mut pheromone_grid: ResMut<PheromoneGrid>,
     mut messages: MessageWriter<NestMoved>,
     ui_query: Query<&Interaction>,
@@ -89,9 +85,7 @@ pub fn handle_nest_drag(
     if !drag.dragging {
         let start = mouse_button.just_pressed(MouseButton::Left)
             && !over_ui
-            && nest_query
-                .single_mut()
-                .is_ok_and(|transform| hits_nest(transform.translation.truncate(), world_pos));
+            && hits_nest(nest_position.0, world_pos);
 
         if !start {
             return;
@@ -106,40 +100,24 @@ pub fn handle_nest_drag(
         return;
     }
 
-    let Ok(mut nest_transform) = nest_query.single_mut() else {
-        drag.dragging = false;
-        return;
-    };
-
-    let from = nest_transform.translation.truncate();
-    let to = clamp_nest_position(world_pos);
+    let from = nest_position.0;
+    nest_position.set(world_pos);
+    let to = nest_position.0;
 
     if from != to {
-        nest_transform.translation.x = to.x;
-        nest_transform.translation.y = to.y;
-
         // The old to-nest trail points at the previous nest location.
         pheromone_grid.clear_to_nest();
-        messages.write(NestMoved { from, to });
+        messages.write(NestMoved { to });
+        debug!("nest moved from {from:?} to {to:?}");
     }
 }
 
-/// Re-home every ant to the moved nest and keep the nest transform in sync.
-/// The transform write is idempotent for [`handle_nest_drag`], which already
-/// moved the nest before writing the message.
-pub fn apply_nest_move(
-    mut messages: MessageReader<NestMoved>,
-    mut ants: Query<&mut Ant>,
-    mut nest_query: Query<&mut Transform, With<Nest>>,
-) {
+/// Re-home every ant to the moved nest. The nest transform is written by the
+/// `Update` sync system from [`NestPosition`], not here.
+pub fn apply_nest_move(mut messages: MessageReader<NestMoved>, mut ants: Query<&mut Ant>) {
     for message in messages.read() {
         for mut ant in &mut ants {
             ant.home = message.to;
-        }
-
-        for mut transform in &mut nest_query {
-            transform.translation.x = message.to.x;
-            transform.translation.y = message.to.y;
         }
     }
 }
@@ -147,6 +125,8 @@ pub fn apply_nest_move(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::world::{NEST_RADIUS, PLAY_AREA_HEIGHT, PLAY_AREA_WIDTH};
+    use crate::simulation::Nest;
 
     #[test]
     fn hit_test_uses_half_the_nest_size() {
@@ -181,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn nest_move_message_rehomes_every_ant_and_moves_the_nest() {
+    fn nest_move_message_rehomes_every_ant_without_touching_the_transform() {
         let mut app = App::new();
         app.add_message::<NestMoved>()
             .add_systems(Update, apply_nest_move);
@@ -202,7 +182,7 @@ mod tests {
             .spawn((Nest, Transform::from_xyz(from.x, from.y, 0.0)))
             .id();
 
-        let _ = app.world_mut().write_message(NestMoved { from, to });
+        let _ = app.world_mut().write_message(NestMoved { to });
         app.update();
 
         for entity in ants {
@@ -214,7 +194,8 @@ mod tests {
                 .unwrap()
                 .translation
                 .truncate(),
-            to
+            from,
+            "the transform is written by the Update sync, not by apply_nest_move"
         );
     }
 }

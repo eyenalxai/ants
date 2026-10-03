@@ -5,7 +5,8 @@ use bevy::prelude::*;
 /// Top-level scheduling sets shared by all feature plugins.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameSet {
-    /// Simulation systems, stepped in `FixedUpdate`.
+    /// Simulation systems, stepped in `FixedUpdate` through the [`SimSet`]
+    /// chain.
     Sim,
     /// Editor input/state systems, run in `Update` (also while paused).
     Editor,
@@ -26,7 +27,8 @@ pub enum GameSet {
 pub enum SimSet {
     /// Environment clock (`SimClock`) advancement.
     Clock,
-    /// Nest-geometry-dependent fixed-step systems.
+    /// Nest-geometry-dependent fixed-step systems. Empty for now: the nest
+    /// transform is synced in `Update` so it stays correct while paused.
     NestSync,
     /// Rebuild the ant-density grid.
     Density,
@@ -50,8 +52,11 @@ pub enum SimSet {
     Visuals,
 }
 
-/// Global pause flag. Pausing itself is implemented by pausing
-/// `Time<Virtual>`, which freezes fixed stepping and virtual deltas; this
-/// resource mirrors that state for the pause button tint.
+/// Read-only mirror of `Time<Virtual>`'s pause state.
+///
+/// `Time<Virtual>` is the single source of truth: the HUD pause button toggles
+/// it and [`crate::ui::hud::sync_paused_indicator`] is the only writer of this
+/// mirror, which exists so widget styling can read a plain resource. Do not
+/// write it anywhere else.
 #[derive(Resource, Default)]
 pub struct Paused(pub bool);

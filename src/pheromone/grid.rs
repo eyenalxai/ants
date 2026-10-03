@@ -94,7 +94,9 @@ impl PheromoneGrid {
     }
 
     /// Add to a single cell, clamping each channel at
-    /// [`PHEROMONE_MAX_INTENSITY`].
+    /// [`PHEROMONE_MAX_INTENSITY`]. Test-only: production deposits go through
+    /// [`PheromoneGrid::add_kernel`].
+    #[cfg(test)]
     pub fn add(&mut self, cell: UVec2, to_food: f32, to_nest: f32) {
         if let Some(index) = Self::index(cell) {
             self.add_to_cell(index, to_food, to_nest);
@@ -242,6 +244,9 @@ impl PheromoneGrid {
         }
     }
 
+    /// Zero every cell. Test-only: production code clears one channel with
+    /// [`PheromoneGrid::clear_to_nest`].
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.cells.fill(Pheromone::default());
         self.scratch.fill(Pheromone::default());

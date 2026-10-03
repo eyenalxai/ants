@@ -1,3 +1,5 @@
+//! Tuning constants, grouped by feature.
+
 pub mod ant;
 pub mod colony;
 pub mod environment;

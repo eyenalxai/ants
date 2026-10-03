@@ -1,3 +1,5 @@
+//! Food brush tool: paint and erase food cells with the pointer.
+
 use bevy::log::warn_once;
 use bevy::prelude::*;
 
