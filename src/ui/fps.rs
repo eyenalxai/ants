@@ -35,6 +35,12 @@ pub struct FpsPerfValue;
 pub struct FpsPerfCache {
     chain_micros: u32,
     frame_micros: u32,
+    render_micros: u32,
+    extract_micros: u32,
+    queue_micros: u32,
+    sort_micros: u32,
+    prepare_micros: u32,
+    draw_micros: u32,
 }
 
 pub fn setup_fps_counter(mut commands: Commands) {
@@ -151,19 +157,45 @@ pub fn fps_perf_text_update_system(
 
     let chain_micros = micros(stats.smoothed_chain_secs);
     let frame_micros = micros(stats.frame_secs);
+    let render_micros = micros(stats.smoothed_render_secs);
+    let extract_micros = micros(stats.smoothed_render_extract_secs);
+    let queue_micros = micros(stats.smoothed_render_queue_secs);
+    let sort_micros = micros(stats.smoothed_render_sort_secs);
+    let prepare_micros = micros(stats.smoothed_render_prepare_secs);
+    let draw_micros = micros(stats.smoothed_render_draw_secs);
 
     for (mut span, mut cache) in &mut span_query {
-        if cache.chain_micros == chain_micros && cache.frame_micros == frame_micros {
+        if cache.chain_micros == chain_micros
+            && cache.frame_micros == frame_micros
+            && cache.render_micros == render_micros
+            && cache.extract_micros == extract_micros
+            && cache.queue_micros == queue_micros
+            && cache.sort_micros == sort_micros
+            && cache.prepare_micros == prepare_micros
+            && cache.draw_micros == draw_micros
+        {
             continue;
         }
 
         cache.chain_micros = chain_micros;
         cache.frame_micros = frame_micros;
+        cache.render_micros = render_micros;
+        cache.extract_micros = extract_micros;
+        cache.queue_micros = queue_micros;
+        cache.sort_micros = sort_micros;
+        cache.prepare_micros = prepare_micros;
+        cache.draw_micros = draw_micros;
 
         span.0 = format!(
-            "  sim {:.2} ms | frame {:.2} ms",
+            "  sim {:.2} ms | frame {:.2} ms | render {:.2} ms (ex {:.2} q {:.2} s {:.2} p {:.2} g {:.2})",
             chain_micros as f32 / 1000.0,
-            frame_micros as f32 / 1000.0
+            frame_micros as f32 / 1000.0,
+            render_micros as f32 / 1000.0,
+            extract_micros as f32 / 1000.0,
+            queue_micros as f32 / 1000.0,
+            sort_micros as f32 / 1000.0,
+            prepare_micros as f32 / 1000.0,
+            draw_micros as f32 / 1000.0,
         );
     }
 }
@@ -281,15 +313,38 @@ mod tests {
             let mut stats = world.resource_mut::<PerfStats>();
             stats.smoothed_chain_secs = 0.006_27;
             stats.frame_secs = 0.015_0;
+            stats.smoothed_render_secs = 0.003_42;
+            stats.smoothed_render_extract_secs = 0.001_21;
+            stats.smoothed_render_queue_secs = 0.001_26;
+            stats.smoothed_render_sort_secs = 0.000_37;
+            stats.smoothed_render_prepare_secs = 0.000_13;
+            stats.smoothed_render_draw_secs = 0.000_28;
         }
         world.run_system_once(fps_perf_text_update_system).unwrap();
         assert_eq!(
             world.get::<TextSpan>(span).unwrap().0,
-            "  sim 6.27 ms | frame 15.00 ms"
+            "  sim 6.27 ms | frame 15.00 ms | render 3.42 ms (ex 1.21 q 1.26 s 0.37 p 0.13 g 0.28)"
         );
 
         let before = span_tick(&world, span);
         world.run_system_once(fps_perf_text_update_system).unwrap();
         assert_eq!(before, span_tick(&world, span));
+
+        // A sub-microsecond render change must not touch the span either...
+        {
+            let mut stats = world.resource_mut::<PerfStats>();
+            stats.smoothed_render_secs = 0.003_420_1;
+        }
+        world.run_system_once(fps_perf_text_update_system).unwrap();
+        assert_eq!(before, span_tick(&world, span));
+
+        // ...while a visible render change does.
+        world.resource_mut::<PerfStats>().smoothed_render_queue_secs = 0.001_80;
+        world.run_system_once(fps_perf_text_update_system).unwrap();
+        assert_ne!(before, span_tick(&world, span));
+        assert_eq!(
+            world.get::<TextSpan>(span).unwrap().0,
+            "  sim 6.27 ms | frame 15.00 ms | render 3.42 ms (ex 1.21 q 1.80 s 0.37 p 0.13 g 0.28)"
+        );
     }
 }
