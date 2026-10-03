@@ -7,7 +7,7 @@ use std::collections::hash_map::Entry;
 
 use crate::constants::world::{
     DENSITY_CELL_SIZE, DENSITY_GRID_HEIGHT, DENSITY_GRID_WIDTH, FOOD_CELL_RADIUS, FOOD_X, FOOD_Y,
-    GRID_SIZE, INITIAL_FOOD_AMOUNT,
+    GRID_HEIGHT, GRID_SIZE, GRID_WIDTH, INITIAL_FOOD_AMOUNT,
 };
 use crate::core::grid::{grid_to_world, in_bounds, pack, unpack, world_to_grid, world_to_index};
 use crate::core::layers::Z_FOOD;
@@ -32,6 +32,10 @@ pub struct FoodMarker {
 #[derive(Resource)]
 pub struct FoodGrid {
     amounts: BTreeMap<u32, f32>,
+    /// Per-cell food quality, flat row-major (`pack(cell)`), defaulting to
+    /// `1.0`. Owned by the food stream; independent of whether the cell is
+    /// currently stored, so a painted cell can carry a value.
+    quality: Box<[f32]>,
     markers: HashMap<u32, Entity>,
     /// Number of stored cells per density cell; a zero byte rejects the whole
     /// bucket without touching it.
@@ -47,6 +51,7 @@ impl Default for FoodGrid {
         let density_cells = DENSITY_GRID_WIDTH * DENSITY_GRID_HEIGHT;
         Self {
             amounts: BTreeMap::new(),
+            quality: vec![1.0; GRID_WIDTH * GRID_HEIGHT].into_boxed_slice(),
             markers: HashMap::new(),
             presence: vec![0; density_cells].into_boxed_slice(),
             buckets: vec![Vec::new(); density_cells].into_boxed_slice(),
@@ -62,6 +67,28 @@ impl FoodGrid {
 
     pub fn contains(&self, cell: UVec2) -> bool {
         self.amounts.contains_key(&pack(cell))
+    }
+
+    /// Food quality of the cell at flat index `cell` ([`pack`] of the cell).
+    ///
+    /// Quality is a per-cell multiplier in the food stream's domain, stored
+    /// independently of the amount: it survives depletion and re-painting, and
+    /// the biology stream reads it at pickup into `Ant::carrying_quality`.
+    /// Every cell defaults to the neutral `1.0`; out-of-range indices return
+    /// that default too.
+    pub fn quality(&self, cell: u32) -> f32 {
+        self.quality.get(cell as usize).copied().unwrap_or(1.0)
+    }
+
+    /// Set the food quality of the cell at flat index `cell` ([`pack`]).
+    ///
+    /// This does not touch the amount, the marker or the spatial index:
+    /// quality is a property of the location. Out-of-range indices are a
+    /// no-op.
+    pub fn set_quality(&mut self, cell: u32, quality: f32) {
+        if let Some(slot) = self.quality.get_mut(cell as usize) {
+            *slot = quality;
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (UVec2, f32)> + '_ {
@@ -309,7 +336,6 @@ pub fn update_food_visuals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::world::{GRID_HEIGHT, GRID_WIDTH};
     use fastrand::Rng;
     use std::hint::black_box;
     use std::time::Instant;
@@ -464,6 +490,37 @@ mod tests {
 
         grid.remove(&mut commands, far);
         assert_eq!(grid.nearest_within(near, 5), None);
+    }
+
+    #[test]
+    fn quality_defaults_to_one_and_roundtrips_per_cell() {
+        let mut world = World::new();
+        let mut commands = world.commands();
+        let mut grid = FoodGrid::default();
+        let empty = pack(UVec2::new(4, 4));
+        let stored_cell = UVec2::new(7, 9);
+        let stored = pack(stored_cell);
+
+        // Default: neutral quality on empty and stored cells alike.
+        assert_eq!(grid.quality(empty), 1.0);
+        assert_eq!(grid.quality(stored), 1.0);
+
+        // Roundtrip on an empty (not stored) cell.
+        grid.set_quality(empty, 0.4);
+        assert_eq!(grid.quality(empty), 0.4);
+        assert!(!grid.contains(unpack(empty)));
+
+        // Roundtrip on a stored cell; quality is independent of the amount.
+        grid.set(&mut commands, stored_cell, INITIAL_FOOD_AMOUNT);
+        grid.set_quality(stored, 1.7);
+        assert_eq!(grid.quality(stored), 1.7);
+        assert_eq!(grid.amount(stored_cell), Some(INITIAL_FOOD_AMOUNT));
+
+        // Out-of-range indices read the neutral default and ignore writes.
+        let out_of_range = (GRID_WIDTH * GRID_HEIGHT) as u32;
+        assert_eq!(grid.quality(out_of_range), 1.0);
+        grid.set_quality(out_of_range, 0.2);
+        assert_eq!(grid.quality(out_of_range), 1.0);
     }
 
     #[test]

@@ -82,6 +82,14 @@ impl Ant {
         self.handling_timer > 0.0
     }
 
+    /// Whether the ant is carrying food (`carrying > 0.0`).
+    ///
+    /// The single source of truth for "carrying food": the biology stream will
+    /// delete the legacy `has_food` flag in favour of this check.
+    pub fn is_laden(&self) -> bool {
+        self.carrying > 0.0
+    }
+
     /// Stand still for [`HANDLING_TIME`] after a pickup or dropoff.
     pub fn start_handling(&mut self) {
         self.handling_timer = HANDLING_TIME;
@@ -103,7 +111,7 @@ impl Ant {
     /// can starve. An [`AntPhase::Returning`] ant is considered home once its
     /// tank is full.
     pub fn tick_energy(&mut self, dt: f32, in_nest: bool, store: &mut NestStore) -> bool {
-        if in_nest && store.food > 0.0 {
+        if in_nest && store.food() > 0.0 {
             let deficit = (1.0 - self.energy).max(0.0);
 
             if deficit > 0.0 {
@@ -184,6 +192,27 @@ impl Ant {
 #[derive(Resource, Default)]
 pub struct AntPopulation(pub usize);
 
+impl AntPopulation {
+    /// Number of live ants.
+    pub fn count(&self) -> usize {
+        self.0
+    }
+
+    /// Record `n` new ants, saturating at `usize::MAX`.
+    ///
+    /// Together with [`Self::remove`] these are the only mutation entry points
+    /// going forward; the field stays public until the biology stream
+    /// privatizes it.
+    pub fn add(&mut self, n: usize) {
+        self.0 = self.0.saturating_add(n);
+    }
+
+    /// Record `n` removed ants, saturating at zero.
+    pub fn remove(&mut self, n: usize) {
+        self.0 = self.0.saturating_sub(n);
+    }
+}
+
 /// Deterministic per-ant random source for steering and wandering.
 ///
 /// Keeping the RNG on the ant (rather than using the thread-local generator)
@@ -255,7 +284,7 @@ pub fn spawn_ants(
     let batch_size = recruitment_batch(
         ramp,
         inputs.colony.delivery_boost(),
-        inputs.nest_store.food,
+        inputs.nest_store.food(),
         capacity,
     );
 
@@ -390,6 +419,38 @@ mod tests {
     }
 
     #[test]
+    fn is_laden_tracks_the_carried_amount() {
+        let mut ant = Ant::test_ant(0.0);
+        assert!(!ant.is_laden());
+
+        ant.carrying = 0.5;
+        assert!(ant.is_laden());
+
+        ant.carrying = 0.0;
+        assert!(!ant.is_laden());
+    }
+
+    #[test]
+    fn population_count_add_and_remove_saturate() {
+        let mut population = AntPopulation::default();
+        assert_eq!(population.count(), 0);
+
+        population.add(3);
+        assert_eq!(population.count(), 3);
+
+        population.remove(2);
+        assert_eq!(population.count(), 1);
+
+        population.remove(10);
+        assert_eq!(population.count(), 0, "removal saturates at zero");
+
+        population.add(usize::MAX);
+        assert_eq!(population.count(), usize::MAX);
+        population.add(1);
+        assert_eq!(population.count(), usize::MAX, "addition saturates");
+    }
+
+    #[test]
     fn energy_drain_forces_returning_then_starvation() {
         let mut ant = Ant::test_ant(0.0);
         let mut store = NestStore { food: 0.0 };
@@ -445,7 +506,7 @@ mod tests {
         assert!(!laden.tick_energy(1.0, true, &mut stocked));
         assert!((laden.energy - 1.0).abs() < EPS);
         assert_eq!(laden.phase, AntPhase::Foraging);
-        assert!(stocked.food < 10.0, "the refill must be paid for");
+        assert!(stocked.food() < 10.0, "the refill must be paid for");
     }
 
     #[test]
@@ -460,14 +521,14 @@ mod tests {
             assert!(!ant.tick_energy(dt, true, &mut store));
         }
         assert!((ant.energy - 0.7).abs() < 1e-4, "energy {}", ant.energy);
-        assert!((store.food - 9.95).abs() < 1e-4, "store {}", store.food);
+        assert!((store.food() - 9.95).abs() < 1e-4, "store {}", store.food());
 
         // Keep refilling to a full tank.
         for _ in 0..64 {
             ant.tick_energy(dt, true, &mut store);
         }
         assert!((ant.energy - 1.0).abs() < EPS);
-        assert!((store.food - 9.92).abs() < 1e-3, "store {}", store.food);
+        assert!((store.food() - 9.92).abs() < 1e-3, "store {}", store.food());
 
         // Empty store: no refill, the ant drains again even in the nest.
         store.food = 0.0;
@@ -494,7 +555,7 @@ mod tests {
         coarse.tick_energy(1.0, true, &mut coarse_store);
 
         assert!((fine.energy - coarse.energy).abs() < 1e-4);
-        assert!((fine_store.food - coarse_store.food).abs() < 1e-4);
+        assert!((fine_store.food() - coarse_store.food()).abs() < 1e-4);
     }
 
     #[test]
@@ -610,10 +671,10 @@ mod tests {
         let expected = 1.0 - 2.0 * NURSE_UPKEEP_PER_ANT * (1.0 / 64.0);
         let store = app.world().resource::<NestStore>();
         assert!(
-            (store.food - expected).abs() < 1e-6,
+            (store.food() - expected).abs() < 1e-6,
             "two nurses for one tick should drain {} food, store is {}",
             2.0 * NURSE_UPKEEP_PER_ANT * (1.0 / 64.0),
-            store.food
+            store.food()
         );
     }
 

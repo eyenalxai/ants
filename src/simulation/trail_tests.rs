@@ -322,8 +322,8 @@ fn deterministic_replay_is_bit_identical() {
         "delivery totals diverged between identical runs"
     );
     assert_eq!(
-        first.world().resource::<AntPopulation>().0,
-        second.world().resource::<AntPopulation>().0,
+        first.world().resource::<AntPopulation>().count(),
+        second.world().resource::<AntPopulation>().count(),
         "population diverged between identical runs"
     );
 }

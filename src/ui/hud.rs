@@ -81,7 +81,7 @@ pub fn update_colony_stats_hud(
     for (mut text, mut cache) in &mut text_query {
         let snapshot = ColonyStatsCache::capture(
             population.0,
-            store.food,
+            store.food(),
             colony.delivery_ema,
             colony.total_food_delivered,
         );

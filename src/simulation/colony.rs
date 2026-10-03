@@ -78,6 +78,15 @@ impl Default for NestStore {
 }
 
 impl NestStore {
+    /// Food currently held by the nest.
+    ///
+    /// Read-only accessor for the store. The field stays public until the
+    /// biology stream privatizes it; mutation goes through [`Self::add`] and
+    /// [`Self::spend`] only.
+    pub fn food(&self) -> f32 {
+        self.food
+    }
+
     /// Add a delivery, clamped at [`NEST_STORE_CAP`].
     pub fn add(&mut self, amount: f32) {
         self.food = (self.food + amount.max(0.0)).clamp(0.0, NEST_STORE_CAP);
