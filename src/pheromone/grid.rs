@@ -2,20 +2,20 @@
 //! tracking.
 
 use bevy::prelude::*;
+use bevy::tasks::ComputeTaskPool;
 
 use crate::constants::pheromone::{
     PHEROMONE_DIFFUSION, PHEROMONE_HALF_LIFE_SECS, PHEROMONE_KERNEL_CENTER,
     PHEROMONE_KERNEL_DIAGONAL, PHEROMONE_KERNEL_ORTHOGONAL, PHEROMONE_MAX_INTENSITY,
+    PHEROMONE_MIN_THRESHOLD, PHEROMONE_TO_NEST_HALF_LIFE_SECS,
 };
 use crate::constants::world::{GRID_HEIGHT, GRID_WIDTH};
 use crate::core::grid::in_bounds;
 
 /// Number of cells in the flat grid.
-const CELL_COUNT: usize = GRID_WIDTH * GRID_HEIGHT;
+pub(crate) const CELL_COUNT: usize = GRID_WIDTH * GRID_HEIGHT;
 /// Number of `u64` words needed for one activity bit per cell.
-const ACTIVE_WORDS: usize = CELL_COUNT.div_ceil(64);
-/// Intensity below which a channel snaps to zero, so active cells can retire.
-const PHEROMONE_MIN_THRESHOLD: f32 = 0.01;
+pub(crate) const ACTIVE_WORDS: usize = CELL_COUNT.div_ceil(64);
 /// Upper bound for the per-step diffusion weight. Below `1 / 4` the update is a
 /// convex combination of a cell and its neighbors, so it cannot oscillate.
 const MAX_DIFFUSION_STEP: f32 = 0.2;
@@ -129,17 +129,20 @@ impl PheromoneGrid {
 
     /// Evaporate for `dt` seconds and diffuse one cell outward.
     ///
-    /// Retention is frame-rate independent: `0.5^(dt / half_life)`. Diffusion
-    /// is a 5-point Laplacian with zero-flux borders, double-buffered so the
-    /// result does not depend on iteration order. `version` only changes when
-    /// a cell value actually changes, so an empty grid (or a step that cannot
-    /// alter any cell) leaves it untouched and the overlay can skip its upload.
+    /// Retention is frame-rate independent and per channel:
+    /// `0.5^(dt / half_life)`, so the `ToFood` recruitment trail evaporates
+    /// faster than the `ToNest` home-range mark. Diffusion is a 5-point
+    /// Laplacian with zero-flux borders, double-buffered so the result does not
+    /// depend on iteration order. `version` only changes when a cell value
+    /// actually changes, so an empty grid (or a step that cannot alter any
+    /// cell) leaves it untouched and the overlay can skip its upload.
     pub fn step(&mut self, dt: f32) {
         if self.active_count == 0 || !dt.is_finite() || dt <= 0.0 {
             return;
         }
 
-        let retention = retention_for(dt);
+        let retention_to_food = retention_for(dt, PHEROMONE_HALF_LIFE_SECS);
+        let retention_to_nest = retention_for(dt, PHEROMONE_TO_NEST_HALF_LIFE_SECS);
         let diffusion = (PHEROMONE_DIFFUSION * dt * 60.0).min(MAX_DIFFUSION_STEP);
 
         let Self {
@@ -210,8 +213,20 @@ impl PheromoneGrid {
             }
 
             let next = Pheromone {
-                to_food: diffuse(center.to_food, food_sum, degree, diffusion, retention),
-                to_nest: diffuse(center.to_nest, nest_sum, degree, diffusion, retention),
+                to_food: diffuse(
+                    center.to_food,
+                    food_sum,
+                    degree,
+                    diffusion,
+                    retention_to_food,
+                ),
+                to_nest: diffuse(
+                    center.to_nest,
+                    nest_sum,
+                    degree,
+                    diffusion,
+                    retention_to_nest,
+                ),
             };
 
             // Degenerate steps can leave a cell bit-identical (e.g. a zero
@@ -291,6 +306,81 @@ impl PheromoneGrid {
         self.version
     }
 
+    /// Apply a dense per-cell deposit field through the 3x3 kernel.
+    ///
+    /// `band_bits` is caller-owned scratch of `bands * ACTIVE_WORDS` words;
+    /// `bands` row bands are convolved in parallel and each band records its
+    /// active cells in its own bitset. Every output cell is computed
+    /// independently from the dense field (bands never race), and the bitsets
+    /// are merged in fixed band order, so the result is bit-deterministic
+    /// regardless of thread scheduling. Buffers are reused by the caller, so
+    /// this allocates nothing per tick and `version` is bumped exactly once.
+    ///
+    /// The per-cell result matches applying [`PheromoneGrid::add_kernel`] once
+    /// per source cell modulo float association: for non-negative deposits
+    /// `clamp(clamp(x + a) + b) == clamp(x + a + b)`, so saturation and the
+    /// active set are unchanged.
+    pub fn apply_dense_deposits(
+        &mut self,
+        to_food: &[f32],
+        to_nest: &[f32],
+        band_bits: &mut [u64],
+    ) {
+        debug_assert_eq!(to_food.len(), CELL_COUNT);
+        debug_assert_eq!(to_nest.len(), CELL_COUNT);
+        debug_assert!(
+            !band_bits.is_empty() && band_bits.len().is_multiple_of(ACTIVE_WORDS),
+            "band scratch must hold whole bitsets"
+        );
+
+        let bands = (band_bits.len() / ACTIVE_WORDS).max(1);
+        let rows_per = GRID_HEIGHT.div_ceil(bands);
+        let Self {
+            cells,
+            active,
+            active_count,
+            version,
+            ..
+        } = self;
+
+        // Bands that receive no rows (only possible when `bands > GRID_HEIGHT`)
+        // must not merge stale bits.
+        band_bits.fill(0);
+
+        if let Some(pool) = ComputeTaskPool::try_get() {
+            pool.scope(|scope| {
+                for (band, (cell_chunk, bits)) in cells
+                    .chunks_mut(rows_per * GRID_WIDTH)
+                    .zip(band_bits.chunks_mut(ACTIVE_WORDS))
+                    .enumerate()
+                {
+                    scope.spawn(async move {
+                        apply_band(cell_chunk, bits, band * rows_per, to_food, to_nest);
+                    });
+                }
+            });
+        } else {
+            // No compute pool (bare test worlds): the same bands run serially.
+            for (band, (cell_chunk, bits)) in cells
+                .chunks_mut(rows_per * GRID_WIDTH)
+                .zip(band_bits.chunks_mut(ACTIVE_WORDS))
+                .enumerate()
+            {
+                apply_band(cell_chunk, bits, band * rows_per, to_food, to_nest);
+            }
+        }
+
+        for local in band_bits.chunks(ACTIVE_WORDS) {
+            for (word, local_word) in active.iter_mut().zip(local.iter()) {
+                let new_bits = *local_word & !*word;
+                *active_count += new_bits.count_ones() as usize;
+                *word |= *local_word;
+            }
+        }
+
+        *version = version.wrapping_add(1);
+    }
+
     /// Add into a known cell and keep the activity bitset in sync.
     fn add_to_cell(&mut self, index: usize, to_food: f32, to_nest: f32) {
         let pheromone = &mut self.cells[index];
@@ -308,6 +398,58 @@ impl PheromoneGrid {
 #[inline]
 fn set_bit(bits: &mut [u64], index: usize) {
     bits[index / 64] |= 1u64 << (index % 64);
+}
+
+/// Convolve one row band of the dense deposit field into its cells and record
+/// the active cells in the band's own bitset.
+fn apply_band(
+    cell_chunk: &mut [Pheromone],
+    bits: &mut [u64],
+    y0: usize,
+    to_food: &[f32],
+    to_nest: &[f32],
+) {
+    for (row, cells_row) in cell_chunk.chunks_mut(GRID_WIDTH).enumerate() {
+        let y = y0 + row;
+
+        for (x, cell) in cells_row.iter_mut().enumerate() {
+            let mut food_sum = 0.0f32;
+            let mut nest_sum = 0.0f32;
+
+            for dy in -1i32..=1 {
+                let ny = y as i32 + dy;
+                if ny < 0 || ny >= GRID_HEIGHT as i32 {
+                    continue;
+                }
+
+                let row_base = ny as usize * GRID_WIDTH;
+
+                for dx in -1i32..=1 {
+                    let nx = x as i32 + dx;
+                    if nx < 0 || nx >= GRID_WIDTH as i32 {
+                        continue;
+                    }
+
+                    let weight = kernel_weight(dx, dy);
+                    let neighbor = row_base + nx as usize;
+                    food_sum += to_food[neighbor] * weight;
+                    nest_sum += to_nest[neighbor] * weight;
+                }
+            }
+
+            if food_sum == 0.0 && nest_sum == 0.0 {
+                continue;
+            }
+
+            cell.to_food = sanitize(cell.to_food + food_sum);
+            cell.to_nest = sanitize(cell.to_nest + nest_sum);
+
+            if cell.to_food > 0.0 || cell.to_nest > 0.0 {
+                let index = y * GRID_WIDTH + x;
+                bits[index / 64] |= 1u64 << (index % 64);
+            }
+        }
+    }
 }
 
 #[inline]
@@ -339,8 +481,8 @@ fn sanitize(value: f32) -> f32 {
 }
 
 /// Frame-rate independent retention for a half-life decay of `dt` seconds.
-fn retention_for(dt: f32) -> f32 {
-    0.5f32.powf(dt / PHEROMONE_HALF_LIFE_SECS)
+fn retention_for(dt: f32, half_life: f32) -> f32 {
+    0.5f32.powf(dt / half_life)
 }
 
 /// Decay `dt` seconds and diffuse one channel from its neighbor sum.
@@ -490,7 +632,151 @@ mod tests {
 
         // Diffusion is interior mass-neutral; only retention changes the sum.
         assert!((after - before * 0.5).abs() < 1e-4);
-        assert!((retention_for(PHEROMONE_HALF_LIFE_SECS) - 0.5).abs() < 1e-6);
+        assert!(
+            (retention_for(PHEROMONE_HALF_LIFE_SECS, PHEROMONE_HALF_LIFE_SECS) - 0.5).abs() < 1e-6
+        );
+        // The home-range mark evaporates slower than the recruitment trail.
+        assert!(grid_total(&grid, PheromoneKind::ToNest) > after);
+    }
+
+    /// Mass-normalized RMS radius in cells (one cell = 4 u), measured from the
+    /// centre of mass. This is the spread metric the realism audit used.
+    fn rms_radius(grid: &PheromoneGrid, kind: PheromoneKind) -> f32 {
+        let mut mass = 0.0f32;
+        let mut wx = 0.0f32;
+        let mut wy = 0.0f32;
+
+        for y in 0..GRID_HEIGHT as u32 {
+            for x in 0..GRID_WIDTH as u32 {
+                let value = grid.sample(UVec2::new(x, y), kind);
+                mass += value;
+                wx += value * x as f32;
+                wy += value * y as f32;
+            }
+        }
+
+        if mass <= 0.0 {
+            return 0.0;
+        }
+
+        let cx = wx / mass;
+        let cy = wy / mass;
+        let mut variance = 0.0f32;
+
+        for y in 0..GRID_HEIGHT as u32 {
+            for x in 0..GRID_WIDTH as u32 {
+                let value = grid.sample(UVec2::new(x, y), kind);
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                variance += value * (dx * dx + dy * dy);
+            }
+        }
+
+        (variance / mass).sqrt()
+    }
+
+    /// F1: the low diffusion constant must keep a kernel deposit a *trail*
+    /// (a couple of cells wide) instead of a cloud that spans the map.
+    #[test]
+    fn kernel_deposit_rms_radius_stays_within_two_cells_over_a_half_life() {
+        let mut grid = PheromoneGrid::new();
+        let center = UVec2::new(GRID_WIDTH as u32 / 2, GRID_HEIGHT as u32 / 2);
+        grid.add_kernel(center, 1.0, 0.0);
+
+        let initial = rms_radius(&grid, PheromoneKind::ToFood);
+        assert!(initial < 1.3, "kernel RMS radius {initial} cells");
+
+        for _ in 0..(PHEROMONE_HALF_LIFE_SECS * 64.0) as u32 {
+            grid.step(1.0 / 64.0);
+        }
+
+        let rms = rms_radius(&grid, PheromoneKind::ToFood);
+        assert!(
+            rms <= 2.0,
+            "RMS radius {rms} cells after one {PHEROMONE_HALF_LIFE_SECS}s half-life"
+        );
+    }
+
+    /// F1: the promoted snap threshold must not erase an isolated deposit.
+    /// The old `0.01` threshold zeroed a single pass after 0.375 s.
+    #[test]
+    fn isolated_single_pass_deposit_survives_ten_seconds() {
+        let mut grid = PheromoneGrid::new();
+        let center = UVec2::new(GRID_WIDTH as u32 / 2, GRID_HEIGHT as u32 / 2);
+        // A single forager pass peaks near 0.04 raw; see constants/sensor.rs.
+        grid.add_kernel(center, 0.04, 0.0);
+
+        for _ in 0..(PHEROMONE_HALF_LIFE_SECS * 64.0) as u32 {
+            grid.step(1.0 / 64.0);
+        }
+
+        assert!(
+            grid.sample(center, PheromoneKind::ToFood) > 0.0,
+            "the deposit centre must survive the snap threshold"
+        );
+        assert!(grid_total(&grid, PheromoneKind::ToFood) > 0.0);
+    }
+
+    /// The dense deposit path must equal one kernel application per source
+    /// cell, independent of how many row bands are used.
+    #[test]
+    fn dense_apply_matches_kernel_applications_and_band_count() {
+        let mut dense_food = vec![0.0f32; CELL_COUNT];
+        let mut dense_nest = vec![0.0f32; CELL_COUNT];
+        let mut expected = PheromoneGrid::new();
+
+        // Two clusters plus a border deposit so clipping is covered.
+        for (cell, food, nest) in [
+            (UVec2::new(50, 40), 0.3f32, 0.1f32),
+            (UVec2::new(51, 41), 0.05, 0.2),
+            (UVec2::new(0, 0), 0.4, 0.0),
+            (UVec2::new(GRID_WIDTH as u32 - 1, 7), 0.0, 0.7),
+        ] {
+            let index = cell.y as usize * GRID_WIDTH + cell.x as usize;
+            dense_food[index] += food;
+            dense_nest[index] += nest;
+            expected.add_kernel(cell, food, nest);
+        }
+
+        let mut one_band = PheromoneGrid::new();
+        one_band.apply_dense_deposits(&dense_food, &dense_nest, &mut vec![0u64; ACTIVE_WORDS]);
+
+        let mut seven_bands = PheromoneGrid::new();
+        seven_bands.apply_dense_deposits(
+            &dense_food,
+            &dense_nest,
+            &mut vec![0u64; 7 * ACTIVE_WORDS],
+        );
+
+        assert_eq!(one_band.version(), 1);
+        assert_eq!(seven_bands.version(), 1);
+
+        for y in 0..GRID_HEIGHT as u32 {
+            for x in 0..GRID_WIDTH as u32 {
+                let cell = UVec2::new(x, y);
+                let want = expected.get(cell).copied().unwrap_or_default();
+                let got = one_band.get(cell).copied().unwrap_or_default();
+                let seven = seven_bands.get(cell).copied().unwrap_or_default();
+
+                assert_eq!(got, seven, "band count changed cell {cell:?}");
+                assert!(
+                    (got.to_food - want.to_food).abs() < 1e-6
+                        && (got.to_nest - want.to_nest).abs() < 1e-6,
+                    "cell {cell:?}: got {got:?}, want {want:?}"
+                );
+            }
+        }
+
+        // The merged bitsets must count exactly the non-zero cells.
+        let populated = (0..GRID_HEIGHT as u32)
+            .flat_map(|y| (0..GRID_WIDTH as u32).map(move |x| UVec2::new(x, y)))
+            .filter(|cell| {
+                let value = one_band.get(*cell).unwrap();
+                value.to_food > 0.0 || value.to_nest > 0.0
+            })
+            .count();
+        assert_eq!(one_band.active_count, populated);
+        assert_eq!(seven_bands.active_count, populated);
     }
 
     #[test]
